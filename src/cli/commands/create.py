@@ -625,28 +625,28 @@ def replace_region_in_files(
                     f'data_store_region = "{data_store_region}"',
                 )
                 modified = True
-            elif 'data_store_region="us"' in content:
+            if 'data_store_region="us"' in content:
                 if debug:
                     logging.debug(f"Replacing data_store_region in {file_path}")
                 content = content.replace(
                     'data_store_region="us"', f'data_store_region="{data_store_region}"'
                 )
                 modified = True
-            elif 'data-store-region="us"' in content:
+            if 'data-store-region="us"' in content:
                 if debug:
                     logging.debug(f"Replacing data-store-region in {file_path}")
                 content = content.replace(
                     'data-store-region="us"', f'data-store-region="{data_store_region}"'
                 )
                 modified = True
-            elif "_DATA_STORE_REGION: us" in content:
+            if "_DATA_STORE_REGION: us" in content:
                 if debug:
                     logging.debug(f"Replacing _DATA_STORE_REGION in {file_path}")
                 content = content.replace(
                     "_DATA_STORE_REGION: us", f"_DATA_STORE_REGION: {data_store_region}"
                 )
                 modified = True
-            elif '"DATA_STORE_REGION", "us"' in content:
+            if '"DATA_STORE_REGION", "us"' in content:
                 if debug:
                     logging.debug(f"Replacing DATA_STORE_REGION in {file_path}")
                 content = content.replace(
@@ -654,7 +654,7 @@ def replace_region_in_files(
                     f'"DATA_STORE_REGION", "{data_store_region}"',
                 )
                 modified = True
-            elif "DATA_STORE_REGION=us" in content:
+            if "DATA_STORE_REGION=us" in content:
                 if debug:
                     logging.debug(f"Replacing DATA_STORE_REGION in {file_path}")
                 content = content.replace(
