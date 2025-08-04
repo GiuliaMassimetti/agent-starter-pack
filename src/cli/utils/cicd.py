@@ -125,6 +125,7 @@ def create_github_connection(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
         )
 
         # Send 'y' followed by enter key to handle both the API enablement prompt and any other prompts
@@ -212,7 +213,10 @@ def create_github_connection(
                 return secret_id, app_installation_id
             elif status == "PENDING_USER_OAUTH" or status == "PENDING_INSTALL_APP":
                 if attempt < max_retries - 1:  # Don't print waiting on last attempt
-                    console.print("⏳ Waiting for GitHub authorization...")
+                    console.print("⏳ Waiting for authorization...")
+                    print(
+                        f"Console: https://console.cloud.google.com/cloud-build/repositories?project={project_id}"
+                    )
                     # Extract and print the action URI for user authentication
                     try:
                         action_uri = (
@@ -225,9 +229,9 @@ def create_github_connection(
                                 "\n🔑 Authentication Required:", style="bold yellow"
                             )
                             console.print(
-                                f"Please visit [link={action_uri}]this page[/link] to authenticate Cloud Build with GitHub:"
+                                f"Please visit [link={action_uri}][bold blue]this page[/bold blue][/link] to authenticate Cloud Build with GitHub:"
                             )
-                            console.print(f"{action_uri}", style="bold blue")
+                            print(f"\n{action_uri}\n")
                             console.print(
                                 "(Copy and paste the link into your browser if clicking doesn't work)"
                             )
@@ -260,12 +264,12 @@ class ProjectConfig:
     cicd_project_id: str
     agent: str
     deployment_target: str
+    repository_name: str
+    repository_owner: str
     region: str = "us-central1"
     dev_project_id: str | None = None
     project_name: str | None = None
-    repository_name: str | None = None
-    repository_owner: str | None = None
-    repository_exists: bool | None = None
+    create_repository: bool | None = None
     host_connection_name: str | None = None
     github_pat: str | None = None
     github_app_installation_id: str | None = None
@@ -402,6 +406,7 @@ def run_command(
     capture_output: bool = False,
     shell: bool = False,
     input: str | None = None,
+    env_vars: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a command and display it to the user"""
     # Format command for display
@@ -409,6 +414,14 @@ def run_command(
     print(f"\n🔄 Running command: {cmd_str}")
     if cwd:
         print(f"📂 In directory: {cwd}")
+
+    # Prepare environment variables
+    env = None
+    if env_vars:
+        import os
+
+        env = os.environ.copy()
+        env.update(env_vars)
 
     # Run the command
     result = subprocess.run(
@@ -419,6 +432,7 @@ def run_command(
         text=True,
         shell=shell,
         input=input,
+        env=env,
     )
 
     # Display output if captured
@@ -472,6 +486,7 @@ def handle_github_authentication() -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
             )
             stdout, stderr = process.communicate(input=token + "\n")
 
@@ -562,7 +577,7 @@ class E2EDeployment:
                 project_dir / "deployment" / "terraform" / "dev" / "vars" / "env.tfvars"
             )
 
-            with open(tf_vars_path) as f:
+            with open(tf_vars_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Replace dev project ID
@@ -577,7 +592,7 @@ class E2EDeployment:
                 project_dir / "deployment" / "terraform" / "vars" / "env.tfvars"
             )
 
-            with open(tf_vars_path) as f:
+            with open(tf_vars_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Replace all project IDs
@@ -610,7 +625,7 @@ class E2EDeployment:
             )
 
         # Write updated content
-        with open(tf_vars_path, "w") as f:
+        with open(tf_vars_path, "w", encoding="utf-8") as f:
             f.write(content)
 
     def setup_terraform_state(self, project_dir: Path, env: Environment) -> None:
@@ -664,7 +679,7 @@ class E2EDeployment:
             state_prefix = "dev" if is_dev_dir else "prod"
 
             backend_file = tf_dir / "backend.tf"
-            with open(backend_file, "w") as f:
+            with open(backend_file, "w", encoding="utf-8") as f:
                 f.write(f'''terraform {{
   backend "gcs" {{
     bucket = "{bucket_name}"

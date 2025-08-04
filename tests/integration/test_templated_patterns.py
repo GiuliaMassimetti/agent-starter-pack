@@ -14,69 +14,16 @@
 
 import os
 import pathlib
-import subprocess
 from datetime import datetime
 
 import pytest
 from rich.console import Console
 
+from tests.integration.utils import run_command
 from tests.utils.get_agents import get_test_combinations_to_run
 
 console = Console()
 TARGET_DIR = "target"
-
-
-def run_command(
-    cmd: list[str],
-    cwd: pathlib.Path | None,
-    message: str,
-    stream_output: bool = True,
-    env: dict | None = None,
-) -> subprocess.CompletedProcess:
-    """Helper function to run commands and stream output"""
-    console.print(f"\n[bold blue]{message}...[/]")
-    try:
-        # Using Popen to stream output
-        with subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=cwd,
-            bufsize=1,  # Line-buffered
-            env=env,
-        ) as process:
-            if stream_output:
-                # Stream stdout
-                if process.stdout:
-                    for line in process.stdout:
-                        console.print(line.strip())
-
-                # Stream stderr
-                if process.stderr:
-                    for line in process.stderr:
-                        console.print("[bold red]" + line.strip())
-            else:
-                # Consume the output but don't print it
-                if process.stdout:
-                    for _ in process.stdout:
-                        pass
-                if process.stderr:
-                    for _ in process.stderr:
-                        pass
-
-            # Wait for the process to complete and get the return code
-            returncode = process.wait()
-
-        if returncode != 0:
-            raise subprocess.CalledProcessError(returncode, cmd)
-
-        console.print(f"[green]✓[/] {message} completed successfully")
-        return subprocess.CompletedProcess(cmd, returncode, "", "")
-
-    except subprocess.CalledProcessError:
-        console.print(f"[bold red]Error: {message}[/]")
-        raise
 
 
 def _run_agent_test(

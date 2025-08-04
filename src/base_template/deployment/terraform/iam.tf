@@ -25,7 +25,7 @@ resource "google_project_iam_member" "cicd_project_roles" {
   project    = var.cicd_runner_project_id
   role       = each.value
   member     = "serviceAccount:${resource.google_service_account.cicd_runner_sa.email}"
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 
 }
 
@@ -42,7 +42,7 @@ resource "google_project_iam_member" "other_projects_roles" {
   project    = each.value.project_id
   role       = each.value.role
   member     = "serviceAccount:${resource.google_service_account.cicd_runner_sa.email}"
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
 {% if cookiecutter.deployment_target == 'cloud_run' %}
 # 3. Allow Cloud Run service SA to pull containers stored in the CICD project
@@ -52,14 +52,14 @@ resource "google_project_iam_member" "cicd_run_invoker_artifact_registry_reader"
 
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:service-${data.google_project.projects[each.key].number}@serverless-robot-prod.iam.gserviceaccount.com"
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 
 }
 
-# 4. Grant Cloud Run SA the required permissions to run the application
-resource "google_project_iam_member" "cloud_run_app_sa_roles" {
+# 4. Grant application SA the required permissions to run the application
+resource "google_project_iam_member" "app_sa_roles" {
   for_each = {
-    for pair in setproduct(keys(local.deploy_project_ids), var.cloud_run_app_roles) :
+    for pair in setproduct(keys(local.deploy_project_ids), var.app_sa_roles) :
     join(",", pair) => {
       project = local.deploy_project_ids[pair[0]]
       role    = pair[1]
@@ -68,10 +68,13 @@ resource "google_project_iam_member" "cloud_run_app_sa_roles" {
 
   project    = each.value.project
   role       = each.value.role
-  member     = "serviceAccount:${google_service_account.cloud_run_app_sa[split(",", each.key)[0]].email}"
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  member     = "serviceAccount:${google_service_account.app_sa[split(",", each.key)[0]].email}"
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
-{% elif cookiecutter.deployment_target == 'agent_engine' %}
+
+{% endif %}
+
+{% if cookiecutter.deployment_target == 'agent_engine' %}
 resource "google_project_service_identity" "vertex_sa" {
   for_each = local.deploy_project_ids
   provider = google-beta
@@ -79,10 +82,10 @@ resource "google_project_service_identity" "vertex_sa" {
   service  = "aiplatform.googleapis.com"
 }
 
-# 3. Grant required permissions to Vertex AI Service Agent SA
+# 5. Grant required permissions to Vertex AI Service Agent SA for Agent Engine
 resource "google_project_iam_member" "vertex_ai_sa_permissions" {
   for_each = {
-    for pair in setproduct(keys(local.deploy_project_ids), var.agentengine_sa_roles) :
+    for pair in setproduct(keys(local.deploy_project_ids), var.app_sa_roles) :
     "${pair[0]}_${pair[1]}" => {
       project = local.deploy_project_ids[pair[0]]
       role = pair[1]
@@ -92,7 +95,7 @@ resource "google_project_iam_member" "vertex_ai_sa_permissions" {
   project     = each.value.project
   role        = each.value.role
   member      = "serviceAccount:service-${data.google_project.projects[split("_", each.key)[0]].number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
-  depends_on  = [resource.google_project_service.shared_services, resource.google_project_service_identity.vertex_sa]
+  depends_on  = [resource.google_project_service.deploy_project_services, resource.google_project_service_identity.vertex_sa]
 }
 {% endif %}
 
@@ -101,14 +104,14 @@ resource "google_service_account_iam_member" "cicd_run_invoker_token_creator" {
   service_account_id = google_service_account.cicd_runner_sa.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${resource.google_service_account.cicd_runner_sa.email}"
-  depends_on         = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on         = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
 # Special assignment: Allow the CICD SA to impersonate himself for trigger creation
 resource "google_service_account_iam_member" "cicd_run_invoker_account_user" {
   service_account_id = google_service_account.cicd_runner_sa.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${resource.google_service_account.cicd_runner_sa.email}"
-  depends_on         = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on         = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
 
 {%- if cookiecutter.data_ingestion %}
@@ -125,6 +128,6 @@ resource "google_project_iam_member" "vertexai_pipeline_sa_roles" {
   project    = each.value.project
   role       = each.value.role
   member     = "serviceAccount:${google_service_account.vertexai_pipeline_app_sa[split(",", each.key)[0]].email}"
-  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
 {%- endif %}

@@ -40,8 +40,9 @@ variable "region" {
 }
 
 variable "host_connection_name" {
-  description = "Name of the host connection you created in Cloud Build"
+  description = "Name of the host connection to create in Cloud Build"
   type        = string
+  default     = "{{ cookiecutter.project_name }}-github-connection"
 }
 
 variable "repository_name" {
@@ -65,17 +66,13 @@ variable "feedback_logs_filter" {
   default     = "jsonPayload.log_type=\"feedback\""
 }
 
-{% if cookiecutter.deployment_target == 'cloud_run' %}
-variable "cloud_run_app_roles" {
-  description = "List of roles to assign to the Cloud Run app service account"
-{% elif cookiecutter.deployment_target == 'agent_engine' %}
-variable "agentengine_sa_roles" {
-  description = "List of roles to assign to the Agent Engine service account"
-{% endif %}
+variable "app_sa_roles" {
+  description = "List of roles to assign to the application service account"
   type        = list(string)
   default = [
 {%- if cookiecutter.deployment_target == 'cloud_run' %}
     "roles/run.invoker",
+    "roles/secretmanager.secretAccessor",
 {%- endif %}
     "roles/aiplatform.user",
     "roles/discoveryengine.editor",
@@ -84,6 +81,8 @@ variable "agentengine_sa_roles" {
     "roles/storage.admin"
   ]
 }
+{%- if cookiecutter.deployment_target == 'cloud_run' %}
+{%- endif %}
 
 variable "cicd_roles" {
   description = "List of roles to assign to the CICD runner service account in the CICD project"
@@ -182,4 +181,42 @@ variable "vector_search_machine_type" {
   default = "e2-standard-2"
 }
 {% endif %}
+{% endif %}
+variable "repository_owner" {
+  description = "Owner of the Git repository - username or organization"
+  type        = string
+}
+{% if cookiecutter.cicd_runner == "github_actions" %}
+
+
+variable "create_repository" {
+  description = "Flag indicating whether to create a new Git repository"
+  type        = bool
+  default     = false
+}
+{% else %}
+variable "github_app_installation_id" {
+  description = "GitHub App Installation ID for Cloud Build"
+  type        = string
+  default     = null
+}
+
+
+variable "github_pat_secret_id" {
+  description = "GitHub PAT Secret ID created by gcloud CLI"
+  type        = string
+  default     = null
+}
+
+variable "create_cb_connection" {
+  description = "Flag indicating if a Cloud Build connection already exists"
+  type        = bool
+  default     = false
+}
+
+variable "create_repository" {
+  description = "Flag indicating whether to create a new Git repository"
+  type        = bool
+  default     = false
+}
 {% endif %}

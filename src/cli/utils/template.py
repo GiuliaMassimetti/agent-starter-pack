@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 import os
 import pathlib
@@ -23,11 +24,15 @@ from typing import Any
 import yaml
 from cookiecutter.main import cookiecutter
 from rich.console import Console
-from rich.prompt import Prompt
+from rich.prompt import IntPrompt, Prompt
 
 from src.cli.utils.version import get_current_version
 
 from .datastores import DATASTORES
+from .remote_template import (
+    get_base_template_name,
+    render_and_merge_makefiles,
+)
 
 ADK_FILES = ["app/__init__.py"]
 NON_ADK_FILES: list[str] = []
@@ -43,7 +48,7 @@ class TemplateConfig:
     def from_file(cls, config_path: pathlib.Path) -> "TemplateConfig":
         """Load template config from file with validation"""
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
             if not isinstance(data, dict):
@@ -68,7 +73,7 @@ class TemplateConfig:
 
 
 OVERWRITE_FOLDERS = ["app", "frontend", "tests", "notebooks"]
-TEMPLATE_CONFIG_FILE = ".templateconfig.yaml"
+TEMPLATE_CONFIG_FILE = "templateconfig.yaml"
 DEPLOYMENT_FOLDERS = ["cloud_run", "agent_engine"]
 DEFAULT_FRONTEND = "streamlit"
 
@@ -80,7 +85,12 @@ def get_available_agents(deployment_target: str | None = None) -> dict:
         deployment_target: Optional deployment target to filter agents
     """
     # Define priority agents that should appear first
-    PRIORITY_AGENTS = ["adk_base", "agentic_rag", "langgraph_base_react"]
+    PRIORITY_AGENTS = [
+        "adk_base",
+        "adk_gemini_fullstack",
+        "agentic_rag",
+        "langgraph_base_react",
+    ]
 
     agents_list = []
     priority_agents_dict = dict.fromkeys(PRIORITY_AGENTS)  # Track priority agents
@@ -88,10 +98,10 @@ def get_available_agents(deployment_target: str | None = None) -> dict:
 
     for agent_dir in agents_dir.iterdir():
         if agent_dir.is_dir() and not agent_dir.name.startswith("__"):
-            template_config_path = agent_dir / "template" / ".templateconfig.yaml"
+            template_config_path = agent_dir / ".template" / "templateconfig.yaml"
             if template_config_path.exists():
                 try:
-                    with open(template_config_path) as f:
+                    with open(template_config_path, encoding="utf-8") as f:
                         config = yaml.safe_load(f)
                     agent_name = agent_dir.name
 
@@ -140,7 +150,7 @@ def load_template_config(template_dir: pathlib.Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(config_file) as f:
+        with open(config_file, encoding="utf-8") as f:
             config = yaml.safe_load(f)
             return config if config else {}
     except Exception as e:
@@ -148,15 +158,20 @@ def load_template_config(template_dir: pathlib.Path) -> dict[str, Any]:
         return {}
 
 
-def get_deployment_targets(agent_name: str) -> list:
+def get_deployment_targets(
+    agent_name: str, remote_config: dict[str, Any] | None = None
+) -> list:
     """Get available deployment targets for the selected agent."""
-    template_path = (
-        pathlib.Path(__file__).parent.parent.parent.parent
-        / "agents"
-        / agent_name
-        / "template"
-    )
-    config = load_template_config(template_path)
+    if remote_config:
+        config = remote_config
+    else:
+        template_path = (
+            pathlib.Path(__file__).parent.parent.parent.parent
+            / "agents"
+            / agent_name
+            / ".template"
+        )
+        config = load_template_config(template_path)
 
     if not config:
         return []
@@ -165,9 +180,11 @@ def get_deployment_targets(agent_name: str) -> list:
     return targets if isinstance(targets, list) else [targets]
 
 
-def prompt_deployment_target(agent_name: str) -> str:
+def prompt_deployment_target(
+    agent_name: str, remote_config: dict[str, Any] | None = None
+) -> str:
     """Ask user to select a deployment target for the agent."""
-    targets = get_deployment_targets(agent_name)
+    targets = get_deployment_targets(agent_name, remote_config=remote_config)
 
     # Define deployment target friendly names and descriptions
     TARGET_INFO = {
@@ -192,14 +209,46 @@ def prompt_deployment_target(agent_name: str) -> str:
         description = info.get("description", "")
         console.print(f"{idx}. [bold]{display_name}[/] - [dim]{description}[/]")
 
-    from rich.prompt import IntPrompt
-
     choice = IntPrompt.ask(
         "\nEnter the number of your deployment target choice",
         default=1,
         show_default=True,
     )
     return targets[choice - 1]
+
+
+def prompt_session_type_selection() -> str:
+    """Ask user to select a session type for Cloud Run deployment."""
+    console = Console()
+
+    session_types = {
+        "in_memory": {
+            "display_name": "In-memory session",
+            "description": "Session data stored in memory - ideal for stateless applications",
+        },
+        "alloydb": {
+            "display_name": "AlloyDB",
+            "description": "Use AlloyDB for session management. Comes with terraform resources for deployment.",
+        },
+        "agent_engine": {
+            "display_name": "Vertex AI Agent Engine",
+            "description": "Managed session service that automatically handles conversation history",
+        },
+    }
+
+    console.print("\n> Please select a session type:")
+    for idx, (_key, info) in enumerate(session_types.items(), 1):
+        console.print(
+            f"{idx}. [bold]{info['display_name']}[/] - [dim]{info['description']}[/]"
+        )
+
+    choice = IntPrompt.ask(
+        "\nEnter the number of your session type choice",
+        default=1,
+        show_default=True,
+    )
+
+    return list(session_types.keys())[choice - 1]
 
 
 def prompt_datastore_selection(
@@ -238,7 +287,7 @@ def prompt_datastore_selection(
         pathlib.Path(__file__).parent.parent.parent.parent
         / "agents"
         / agent_name
-        / "template"
+        / ".template"
     )
     config = load_template_config(template_path)
 
@@ -312,10 +361,40 @@ def prompt_datastore_selection(
     return datastore_type
 
 
+def prompt_cicd_runner_selection() -> str:
+    """Ask user to select a CI/CD runner."""
+    console = Console()
+
+    cicd_runners = {
+        "google_cloud_build": {
+            "display_name": "Google Cloud Build",
+            "description": "Fully managed CI/CD, deeply integrated with GCP for fast, consistent builds and deployments.",
+        },
+        "github_actions": {
+            "display_name": "GitHub Actions",
+            "description": "GitHub Actions: CI/CD with secure workload identity federation directly in GitHub.",
+        },
+    }
+
+    console.print("\n> Please select a CI/CD runner:")
+    for idx, (_key, info) in enumerate(cicd_runners.items(), 1):
+        console.print(
+            f"{idx}. [bold]{info['display_name']}[/] - [dim]{info['description']}[/]"
+        )
+
+    choice = IntPrompt.ask(
+        "\nEnter the number of your CI/CD runner choice",
+        default=1,
+        show_default=True,
+    )
+
+    return list(cicd_runners.keys())[choice - 1]
+
+
 def get_template_path(agent_name: str, debug: bool = False) -> pathlib.Path:
     """Get the absolute path to the agent template directory."""
     current_dir = pathlib.Path(__file__).parent.parent.parent.parent
-    template_path = current_dir / "agents" / agent_name / "template"
+    template_path = current_dir / "agents" / agent_name / ".template"
     if debug:
         logging.debug(f"Looking for template in: {template_path}")
         logging.debug(f"Template exists: {template_path.exists()}")
@@ -359,9 +438,14 @@ def process_template(
     template_dir: pathlib.Path,
     project_name: str,
     deployment_target: str | None = None,
+    cicd_runner: str | None = None,
     include_data_ingestion: bool = False,
     datastore: str | None = None,
+    session_type: str | None = None,
     output_dir: pathlib.Path | None = None,
+    remote_template_path: pathlib.Path | None = None,
+    remote_config: dict[str, Any] | None = None,
+    in_folder: bool = False,
 ) -> None:
     """Process the template directory and create a new project.
 
@@ -370,16 +454,36 @@ def process_template(
         template_dir: Directory containing the template files
         project_name: Name of the project to create
         deployment_target: Optional deployment target (agent_engine or cloud_run)
+        cicd_runner: Optional CI/CD runner to use
         include_data_ingestion: Whether to include data pipeline components
+        datastore: Optional datastore type for data ingestion
+        session_type: Optional session type for cloud_run deployment
         output_dir: Optional output directory path, defaults to current directory
+        remote_template_path: Optional path to remote template for overlay
+        remote_config: Optional remote template configuration
+        in_folder: Whether to template directly into the output directory instead of creating a subdirectory
     """
     logging.debug(f"Processing template from {template_dir}")
     logging.debug(f"Project name: {project_name}")
     logging.debug(f"Include pipeline: {datastore}")
     logging.debug(f"Output directory: {output_dir}")
 
-    # Get paths
-    agent_path = template_dir.parent  # Get parent of template dir
+    # Handle remote vs local templates
+    is_remote = remote_template_path is not None
+
+    if is_remote:
+        # For remote templates, determine the base template
+        base_template_name = get_base_template_name(remote_config or {})
+        agent_path = (
+            pathlib.Path(__file__).parent.parent.parent.parent
+            / "agents"
+            / base_template_name
+        )
+        logging.debug(f"Remote template using base: {base_template_name}")
+    else:
+        # For local templates, use the existing logic
+        agent_path = template_dir.parent  # Get parent of template dir
+
     logging.debug(f"agent path: {agent_path}")
     logging.debug(f"agent path exists: {agent_path.exists()}")
     logging.debug(
@@ -452,7 +556,7 @@ def process_template(
             copy_frontend_files(frontend_type, project_template)
             logging.debug(f"4. Processed frontend files for type: {frontend_type}")
 
-            # 5. Finally, copy agent-specific files to override everything else
+            # 5. Copy agent-specific files to override base template
             if agent_path.exists():
                 for folder in OVERWRITE_FOLDERS:
                     agent_folder = agent_path / folder
@@ -463,20 +567,27 @@ def process_template(
                             agent_folder, project_folder, agent_name, overwrite=True
                         )
 
-            # Copy agent README.md if it exists
-            agent_readme = agent_path / "README.md"
-            if agent_readme.exists():
-                agent_readme_dest = project_template / "agent_README.md"
-                shutil.copy2(agent_readme, agent_readme_dest)
+            # 6. Finally, overlay remote template files if present
+            if is_remote and remote_template_path:
                 logging.debug(
-                    f"Copied agent README from {agent_readme} to {agent_readme_dest}"
+                    f"6. Overlaying remote template files from {remote_template_path}"
+                )
+                copy_files(
+                    remote_template_path,
+                    project_template,
+                    agent_name=agent_name,
+                    overwrite=True,
                 )
 
             # Load and validate template config first
-            template_path = pathlib.Path(template_dir)
-            config = load_template_config(template_path)
+            if is_remote:
+                config = remote_config or {}
+            else:
+                template_path = pathlib.Path(template_dir)
+                config = load_template_config(template_path)
+
             if not config:
-                raise ValueError(f"Could not load template config from {template_path}")
+                raise ValueError("Could not load template config")
 
             # Validate deployment target
             available_targets = config.get("settings", {}).get("deployment_targets", [])
@@ -488,8 +599,8 @@ def process_template(
                     f"Invalid deployment target '{deployment_target}'. Available targets: {available_targets}"
                 )
 
-            # Load template config
-            template_config = load_template_config(pathlib.Path(template_dir))
+            # Use the already loaded config
+            template_config = config
 
             # Check if data processing should be included
             if include_data_ingestion and datastore:
@@ -499,15 +610,28 @@ def process_template(
                 copy_data_ingestion_files(project_template, datastore)
 
             # Create cookiecutter.json in the template root
-            # Process extra dependencies
-            extra_deps = template_config.get("settings", {}).get(
-                "extra_dependencies", []
+            # Get settings from template config
+            settings = template_config.get("settings", {})
+            extra_deps = settings.get("extra_dependencies", [])
+            frontend_type = settings.get("frontend_type", DEFAULT_FRONTEND)
+            tags = settings.get("tags", ["None"])
+
+            # Load adk-cheatsheet.md and llm.txt for injection
+            adk_cheatsheet_path = (
+                pathlib.Path(__file__).parent.parent.parent
+                / "resources"
+                / "docs"
+                / "adk-cheatsheet.md"
             )
-            # Get frontend type from template config
-            frontend_type = template_config.get("settings", {}).get(
-                "frontend_type", DEFAULT_FRONTEND
+            with open(adk_cheatsheet_path, encoding="utf-8") as f:
+                adk_cheatsheet_content = f.read()
+
+            llm_txt_path = (
+                pathlib.Path(__file__).parent.parent.parent.parent / "llm.txt"
             )
-            tags = template_config.get("settings", {}).get("tags", ["None"])
+            with open(llm_txt_path, encoding="utf-8") as f:
+                llm_txt_content = f.read()
+
             cookiecutter_config = {
                 "project_name": "my-project",
                 "agent_name": agent_name,
@@ -516,17 +640,21 @@ def process_template(
                 "example_question": template_config.get("example_question", "").ljust(
                     61
                 ),
+                "settings": settings,
                 "tags": tags,
                 "deployment_target": deployment_target or "",
+                "cicd_runner": cicd_runner or "google_cloud_build",
+                "session_type": session_type or "",
                 "frontend_type": frontend_type,
                 "extra_dependencies": [extra_deps],
                 "data_ingestion": include_data_ingestion,
                 "datastore_type": datastore if datastore else "",
+                "adk_cheatsheet": adk_cheatsheet_content,
+                "llm_txt": llm_txt_content,
                 "_copy_without_render": [
                     "*.ipynb",  # Don't render notebooks
                     "*.json",  # Don't render JSON files
                     "frontend/*",  # Don't render frontend directory
-                    # "tests/*",  # Don't render tests directory
                     "notebooks/*",  # Don't render notebooks directory
                     ".git/*",  # Don't render git directory
                     "__pycache__/*",  # Don't render cache
@@ -534,15 +662,15 @@ def process_template(
                     ".pytest_cache/*",
                     ".venv/*",
                     "*templates.py",  # Don't render templates files
-                    "!*.py",  # render Python files
-                    "!Makefile",  # DO render Makefile
-                    "!README.md",  # DO render README.md
+                    "Makefile",  # Don't render Makefile - handled by render_and_merge_makefiles
+                    # Don't render agent.py unless it's agentic_rag
+                    "app/agent.py" if agent_name != "agentic_rag" else "",
                 ],
             }
 
-            with open(cookiecutter_template / "cookiecutter.json", "w") as f:
-                import json
-
+            with open(
+                cookiecutter_template / "cookiecutter.json", "w", encoding="utf-8"
+            ) as f:
                 json.dump(cookiecutter_config, f, indent=4)
 
             logging.debug(f"Template structure created at {cookiecutter_template}")
@@ -554,6 +682,7 @@ def process_template(
             cookiecutter(
                 str(cookiecutter_template),
                 no_input=True,
+                overwrite_if_exists=True,
                 extra_context={
                     "project_name": project_name,
                     "agent_name": agent_name,
@@ -562,67 +691,228 @@ def process_template(
             logging.debug("Template processing completed successfully")
 
             # Move the generated project to the final destination
-            output_dir = temp_path / project_name
-            final_destination = destination_dir / project_name
+            generated_project_dir = temp_path / project_name
 
-            logging.debug(f"Moving project from {output_dir} to {final_destination}")
+            if in_folder:
+                # For in-folder mode, copy files directly to the destination directory
+                final_destination = destination_dir
+                logging.debug(
+                    f"In-folder mode: copying files from {generated_project_dir} to {final_destination}"
+                )
 
-            if output_dir.exists():
-                if final_destination.exists():
-                    shutil.rmtree(final_destination)
-                shutil.copytree(output_dir, final_destination, dirs_exist_ok=True)
-                logging.debug(f"Project successfully created at {final_destination}")
+                if generated_project_dir.exists():
+                    # Copy all files from generated project to destination directory
+                    for item in generated_project_dir.iterdir():
+                        dest_item = final_destination / item.name
 
-                # Delete appropriate files based on ADK tag
-                if "adk" in tags:
-                    files_to_delete = [final_destination / f for f in NON_ADK_FILES]
-                else:
-                    files_to_delete = [final_destination / f for f in ADK_FILES]
-
-                for file_path in files_to_delete:
-                    if file_path.exists():
-                        file_path.unlink()
-                        logging.debug(f"Deleted {file_path}")
-
-                # After copying template files, handle the lock file
-                if deployment_target:
-                    # Get the source lock file path
-                    lock_path = (
-                        pathlib.Path(__file__).parent.parent.parent.parent
-                        / "src"
-                        / "resources"
-                        / "locks"
-                        / f"uv-{agent_name}-{deployment_target}.lock"
-                    )
-                    logging.debug(f"Looking for lock file at: {lock_path}")
-                    logging.debug(f"Lock file exists: {lock_path.exists()}")
-                    if not lock_path.exists():
-                        raise FileNotFoundError(f"Lock file not found: {lock_path}")
-                    # Copy and rename to uv.lock in the project directory
-                    shutil.copy2(lock_path, final_destination / "uv.lock")
-                    logging.debug(
-                        f"Copied lock file from {lock_path} to {final_destination}/uv.lock"
-                    )
-
-                    # Replace cookiecutter project name with actual project name in lock file
-                    lock_file_path = final_destination / "uv.lock"
-                    with open(lock_file_path, "r+", encoding="utf-8") as f:
-                        content = f.read()
-                        f.seek(0)
-                        f.write(
-                            content.replace(
-                                "{{cookiecutter.project_name}}", project_name
+                        # Special handling for README files - always preserve existing README
+                        # Special handling for pyproject.toml files - only preserve for in-folder updates
+                        should_preserve_file = item.name.lower().startswith(
+                            "readme"
+                        ) or (item.name == "pyproject.toml" and in_folder)
+                        if (
+                            should_preserve_file
+                            and (final_destination / item.name).exists()
+                        ):
+                            # The existing file stays, use base template file with starter_pack prefix
+                            base_name = item.stem
+                            extension = item.suffix
+                            dest_item = (
+                                final_destination
+                                / f"starter_pack_{base_name}{extension}"
                             )
-                        )
-                        f.truncate()
+
+                            # Try to use base template file instead of templated file
+                            base_file = base_template_path / item.name
+                            if base_file.exists():
+                                logging.debug(
+                                    f"{item.name} conflict: preserving existing {item.name}, using base template {item.name} as starter_pack_{base_name}{extension}"
+                                )
+                                # Process the base template file through cookiecutter
+                                try:
+                                    import tempfile as tmp_module
+
+                                    with (
+                                        tmp_module.TemporaryDirectory() as temp_file_dir
+                                    ):
+                                        temp_file_path = pathlib.Path(temp_file_dir)
+
+                                        # Create a minimal cookiecutter structure for just the file
+                                        file_template_dir = (
+                                            temp_file_path / "file_template"
+                                        )
+                                        file_template_dir.mkdir()
+                                        file_project_dir = (
+                                            file_template_dir
+                                            / "{{cookiecutter.project_name}}"
+                                        )
+                                        file_project_dir.mkdir()
+
+                                        # Copy base file to template structure
+                                        shutil.copy2(
+                                            base_file, file_project_dir / item.name
+                                        )
+
+                                        # Create cookiecutter.json with same config as main template
+                                        with open(
+                                            file_template_dir / "cookiecutter.json",
+                                            "w",
+                                            encoding="utf-8",
+                                        ) as f:
+                                            json.dump(cookiecutter_config, f, indent=4)
+
+                                        # Process the file template
+                                        cookiecutter(
+                                            str(file_template_dir),
+                                            no_input=True,
+                                            overwrite_if_exists=True,
+                                            output_dir=str(temp_file_path),
+                                            extra_context={
+                                                "project_name": project_name,
+                                                "agent_name": agent_name,
+                                            },
+                                        )
+
+                                        # Copy the processed file
+                                        processed_file = (
+                                            temp_file_path / project_name / item.name
+                                        )
+                                        if processed_file.exists():
+                                            shutil.copy2(processed_file, dest_item)
+                                        else:
+                                            # Fallback to original behavior if processing fails
+                                            shutil.copy2(item, dest_item)
+
+                                except Exception as e:
+                                    logging.warning(
+                                        f"Failed to process base template {item.name}: {e}. Using templated {item.name} instead."
+                                    )
+                                    shutil.copy2(item, dest_item)
+                            else:
+                                # Fallback to original behavior if base file doesn't exist
+                                logging.debug(
+                                    f"{item.name} conflict: preserving existing {item.name}, saving templated {item.name} as starter_pack_{base_name}{extension}"
+                                )
+                                shutil.copy2(item, dest_item)
+                        else:
+                            # Normal file copying
+                            if item.is_dir():
+                                if dest_item.exists():
+                                    shutil.rmtree(dest_item)
+                                shutil.copytree(item, dest_item, dirs_exist_ok=True)
+                            else:
+                                shutil.copy2(item, dest_item)
                     logging.debug(
-                        f"Updated project name in lock file at {lock_file_path}"
+                        f"Project files successfully copied to {final_destination}"
                     )
             else:
-                logging.error(f"Generated project directory not found at {output_dir}")
-                raise FileNotFoundError(
-                    f"Generated project directory not found at {output_dir}"
+                # Standard mode: create project subdirectory
+                final_destination = destination_dir / project_name
+                logging.debug(
+                    f"Standard mode: moving project from {generated_project_dir} to {final_destination}"
                 )
+
+                if generated_project_dir.exists():
+                    if final_destination.exists():
+                        shutil.rmtree(final_destination)
+                    shutil.copytree(
+                        generated_project_dir, final_destination, dirs_exist_ok=True
+                    )
+                    logging.debug(
+                        f"Project successfully created at {final_destination}"
+                    )
+
+            # Always check if the project was successfully created before proceeding
+            if not final_destination.exists():
+                logging.error(
+                    f"Final destination directory not found at {final_destination}"
+                )
+                raise FileNotFoundError(
+                    f"Final destination directory not found at {final_destination}"
+                )
+
+            # Render and merge Makefiles.
+            # If it's a local template, remote_template_path will be None,
+            # and only the base Makefile will be rendered.
+            render_and_merge_makefiles(
+                base_template_path=base_template_path,
+                final_destination=final_destination,
+                cookiecutter_config=cookiecutter_config,
+                remote_template_path=remote_template_path,
+            )
+
+            # Delete appropriate files based on ADK tag
+            if "adk" in tags:
+                files_to_delete = [final_destination / f for f in NON_ADK_FILES]
+            else:
+                files_to_delete = [final_destination / f for f in ADK_FILES]
+
+            for file_path in files_to_delete:
+                if file_path.exists():
+                    file_path.unlink()
+                    logging.debug(f"Deleted {file_path}")
+
+            # Clean up unused_* files and directories created by conditional templates
+            import glob
+
+            unused_patterns = [
+                final_destination / "unused_*",
+                final_destination / "**" / "unused_*",
+            ]
+
+            for pattern in unused_patterns:
+                for unused_path_str in glob.glob(str(pattern), recursive=True):
+                    unused_path = pathlib.Path(unused_path_str)
+                    if unused_path.exists():
+                        if unused_path.is_dir():
+                            shutil.rmtree(unused_path)
+                            logging.debug(f"Deleted unused directory: {unused_path}")
+                        else:
+                            unused_path.unlink()
+                            logging.debug(f"Deleted unused file: {unused_path}")
+
+            # Handle pyproject.toml and uv.lock files
+            if is_remote and remote_template_path:
+                # For remote templates, use their pyproject.toml and uv.lock if they exist
+                remote_pyproject = remote_template_path / "pyproject.toml"
+                remote_uv_lock = remote_template_path / "uv.lock"
+
+                if remote_pyproject.exists():
+                    shutil.copy2(remote_pyproject, final_destination / "pyproject.toml")
+                    logging.debug("Used pyproject.toml from remote template")
+
+                if remote_uv_lock.exists():
+                    shutil.copy2(remote_uv_lock, final_destination / "uv.lock")
+                    logging.debug("Used uv.lock from remote template")
+            elif deployment_target:
+                # For local templates, use the existing logic
+                lock_path = (
+                    pathlib.Path(__file__).parent.parent.parent.parent
+                    / "src"
+                    / "resources"
+                    / "locks"
+                    / f"uv-{agent_name}-{deployment_target}.lock"
+                )
+                logging.debug(f"Looking for lock file at: {lock_path}")
+                logging.debug(f"Lock file exists: {lock_path.exists()}")
+                if not lock_path.exists():
+                    raise FileNotFoundError(f"Lock file not found: {lock_path}")
+                # Copy and rename to uv.lock in the project directory
+                shutil.copy2(lock_path, final_destination / "uv.lock")
+                logging.debug(
+                    f"Copied lock file from {lock_path} to {final_destination}/uv.lock"
+                )
+
+                # Replace cookiecutter project name with actual project name in lock file
+                lock_file_path = final_destination / "uv.lock"
+                with open(lock_file_path, "r+", encoding="utf-8") as f:
+                    content = f.read()
+                    f.seek(0)
+                    f.write(
+                        content.replace("{{cookiecutter.project_name}}", project_name)
+                    )
+                    f.truncate()
+                logging.debug(f"Updated project name in lock file at {lock_file_path}")
 
         except Exception as e:
             logging.error(f"Failed to process template: {e!s}")
@@ -665,7 +955,11 @@ def copy_files(
             return True
         if "__pycache__" in str(path) or path.name == "__pycache__":
             return True
+        if ".git" in path.parts:
+            return True
         if agent_name is not None and should_exclude_path(path, agent_name):
+            return True
+        if path.is_dir() and path.name == ".template":
             return True
         return False
 

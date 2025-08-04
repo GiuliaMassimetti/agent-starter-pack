@@ -16,12 +16,12 @@
 </a> [![Launch in Cloud Shell](https://img.shields.io/badge/Launch-in_Cloud_Shell-white)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Feliasecchig%2Fasp-open-in-cloud-shell&cloudshell_print=open-in-cs) ![Stars](https://img.shields.io/github/stars/GoogleCloudPlatform/agent-starter-pack?color=yellow)
 
 
-The `agent-starter-pack` is a collection of production-ready Generative AI Agent templates built for Google Cloud. <br>
+The `agent-starter-pack` is a Python package that provides a collection of production-ready Generative AI Agent templates built for Google Cloud. <br>
 It accelerates development by providing a holistic, production-ready solution, addressing common challenges (Deployment & Operations, Evaluation, Customization, Observability) in building and deploying GenAI agents.
 
 | ⚡️ Launch | 🧪 Experiment  | ✅ Deploy | 🛠️ Customize |
 |---|---|---|---|
-| [Pre-built agent templates](./agents/) (ReAct, RAG, multi-agent, Live API). | [Vertex AI evaluation](https://cloud.google.com/vertex-ai/generative-ai/docs/models/evaluation-overview) and an interactive playground. | Production-ready infra with [monitoring, observability](https://googlecloudplatform.github.io/agent-starter-pack/guide/observability), and [CI/CD](https://googlecloudplatform.github.io/agent-starter-pack/guide/deployment) on [Cloud Run](https://cloud.google.com/run) or [Agent Engine](https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/overview). | Extend and customize templates according to your needs. |
+| [Pre-built agent templates](./agents/) (ReAct, RAG, multi-agent, Live API). | [Vertex AI evaluation](https://cloud.google.com/vertex-ai/generative-ai/docs/models/evaluation-overview) and an interactive playground. | Production-ready infra with [monitoring, observability](https://googlecloudplatform.github.io/agent-starter-pack/guide/observability), and [CI/CD](https://googlecloudplatform.github.io/agent-starter-pack/guide/deployment) on [Cloud Run](https://cloud.google.com/run) or [Agent Engine](https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/overview). | Extend and customize templates according to your needs. 🆕 Now integrating with [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
 
 ---
  
@@ -31,27 +31,38 @@ Ready to build your AI agent? Simply run this command:
 
 ```bash
 # Create and activate a Python virtual environment
-python -m venv venv && source venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 
 # Install the agent starter pack
-pip install agent-starter-pack
+pip install --upgrade agent-starter-pack
 
 # Create a new agent project
 agent-starter-pack create my-awesome-agent
 ```
 
+<details>
+<summary> ✨ Alternative: Using uv</summary>
+
+If you have [`uv`](https://github.com/astral-sh/uv) installed, you can create and set up your project with a single command:
+```bash
+uvx agent-starter-pack create my-fullstack-agent
+```
+This command handles creating the project without needing to pre-install the package into a virtual environment.
+</details>
+
 **That's it!** You now have a fully functional agent project—complete with backend, frontend, and deployment infrastructure—ready for you to explore and customize.
+
+### 🔧 Enhance Existing Agents
+
+Already have an agent? Add production-ready deployment and infrastructure:
+
+```bash
+agent-starter-pack enhance my-existing-agent
+```
+
 See [Installation Guide](https://googlecloudplatform.github.io/agent-starter-pack/guide/installation) for more options, or try with zero setup in [Firebase Studio](https://studio.firebase.google.com/new?template=https%3A%2F%2Fgithub.com%2FGoogleCloudPlatform%2Fagent-starter-pack%2Ftree%2Fmain%2Fsrc%2Fresources%2Fidx) or [Cloud Shell](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Feliasecchig%2Fasp-open-in-cloud-shell&cloudshell_print=open-in-cs).
 
 ---
-
- 🆕 The starter pack offers full support for Agent Engine, a new fully managed solution to deploy agents. Simply run this command to get started:
-
-```bash
-agent-starter-pack create my-agent -d agent_engine -a adk_base
-```
-
-*See the [full list of options](https://googlecloudplatform.github.io/agent-starter-pack/cli/create) for details.*
 
 ## 🤖 Agents
 
@@ -72,9 +83,10 @@ Looking to explore more ADK examples? Check out the [ADK Samples Repository](htt
 #### Extra Features
 
 The `agent-starter-pack` offers two key features to accelerate and simplify the development of your agent:
-- **🔄 [CI/CD Automation (Experimental)](https://googlecloudplatform.github.io/agent-starter-pack/cli/setup_cicd)** - One command to set up a complete GitHub + Cloud Build pipeline for all environments
+- **🔄 [CI/CD Automation](https://googlecloudplatform.github.io/agent-starter-pack/cli/setup_cicd)** - A single command to set up a complete CI/CD pipeline for all environments, supporting both **Google Cloud Build** and **GitHub Actions**.
 - **📥 [Data Pipeline for RAG with Terraform/CI-CD](https://googlecloudplatform.github.io/agent-starter-pack/guide/data-ingestion)** - Seamlessly integrate a data pipeline to process embeddings for RAG into your agent system. Supporting [Vertex AI Search](https://cloud.google.com/generative-ai-app-builder/docs/enterprise-search-introduction) and [Vector Search](https://cloud.google.com/vertex-ai/docs/vector-search/overview).
-
+- **[Remote Templates](docs/guide/remote-templating.md)**: Create and share your own agent starter packs templates from any Git repository.
+- **🤖 Gemini CLI Integration** - Use the [Gemini CLI](https://github.com/google-gemini/gemini-cli) and the included `GEMINI.md` context file to ask questions about your template, agent architecture, and the path to production. Get instant guidance and code examples directly in your terminal.
 
 ## High-Level Architecture
 

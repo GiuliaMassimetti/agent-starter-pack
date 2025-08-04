@@ -11,7 +11,7 @@ resolution-markers = [
 
 [[package]]
 name = "agent-starter-pack"
-version = "0.4.5"
+version = "0.11.1"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
@@ -31,8 +31,6 @@ lint = [
     { name = "codespell" },
     { name = "mypy" },
     { name = "ruff" },
-    { name = "types-pyyaml" },
-    { name = "types-requests" },
 ]
 
 [package.dev-dependencies]
@@ -61,24 +59,24 @@ dev = [
     { name = "sphinx-rtd-theme" },
     { name = "streamlit" },
     { name = "streamlit-feedback" },
+    { name = "types-pyyaml" },
+    { name = "types-requests" },
     { name = "watchdog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "backoff", specifier = ">=2.2.1" },
-    { name = "click", specifier = "~=8.1.7" },
-    { name = "codespell", marker = "extra == 'lint'", specifier = "~=2.2.0" },
-    { name = "cookiecutter", specifier = "~=2.5.0" },
-    { name = "google-cloud-aiplatform", specifier = "~=1.87.0" },
+    { name = "click", specifier = ">=8.1.7" },
+    { name = "codespell", marker = "extra == 'lint'" },
+    { name = "cookiecutter", specifier = "~=2.6.0" },
+    { name = "google-cloud-aiplatform", specifier = ">=1.87.0" },
     { name = "ipykernel", marker = "extra == 'jupyter'", specifier = ">=6.29.5" },
     { name = "jupyter", marker = "extra == 'jupyter'" },
-    { name = "mypy", marker = "extra == 'lint'", specifier = "~=1.15.0" },
-    { name = "pyyaml", specifier = "~=6.0.1" },
-    { name = "rich", specifier = "~=13.7.0" },
-    { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.4.6" },
-    { name = "types-pyyaml", marker = "extra == 'lint'", specifier = "~=6.0.12.20240917" },
-    { name = "types-requests", marker = "extra == 'lint'", specifier = "~=2.32.0.20240914" },
+    { name = "mypy", marker = "extra == 'lint'" },
+    { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "ruff", marker = "extra == 'lint'" },
 ]
 provides-extras = ["jupyter", "lint"]
 
@@ -108,6 +106,8 @@ dev = [
     { name = "sphinx-rtd-theme", specifier = "~=2.0.0" },
     { name = "streamlit", specifier = "~=1.42.0" },
     { name = "streamlit-feedback", specifier = "~=0.1.4" },
+    { name = "types-pyyaml" },
+    { name = "types-requests" },
     { name = "watchdog", specifier = "~=6.0.0" },
 ]
 
@@ -825,7 +825,7 @@ wheels = [
 
 [[package]]
 name = "cookiecutter"
-version = "2.5.0"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "arrow" },
@@ -837,9 +837,9 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/5d/9f6a7b748436597060654c8b5815dabedd78893e566bc9838c6dcbf05e04/cookiecutter-2.5.0.tar.gz", hash = "sha256:e61e9034748e3f41b8bd2c11f00d030784b48711c4d5c42363c50989a65331ec", size = 157269 }
+sdist = { url = "https://files.pythonhosted.org/packages/52/17/9f2cd228eb949a91915acd38d3eecdc9d8893dde353b603f0db7e9f6be55/cookiecutter-2.6.0.tar.gz", hash = "sha256:db21f8169ea4f4fdc2408d48ca44859349de2647fbe494a9d6c3edfc0542c21c", size = 158767 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/32/91af80d3ecbe0113ae26cdaa623a3def2319a02c1eafe91733ac45133afd/cookiecutter-2.5.0-py3-none-any.whl", hash = "sha256:8aa2f12ed11bc05628651e9dc4353a10571dd9908aaaaeec959a2b9ea465a5d2", size = 39080 },
+    { url = "https://files.pythonhosted.org/packages/b6/d9/0137658a353168ffa9d0fc14b812d3834772040858ddd1cb6eeaf09f7a44/cookiecutter-2.6.0-py3-none-any.whl", hash = "sha256:a54a8e37995e4ed963b3e82831072d1ad4b005af736bb17b99c2cbd9d41b6e2d", size = 39177 },
 ]
 
 [[package]]
@@ -1346,7 +1346,7 @@ wheels = [
 
 [[package]]
 name = "google-cloud-aiplatform"
-version = "1.87.0"
+version = "1.96.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
@@ -1355,6 +1355,7 @@ dependencies = [
     { name = "google-cloud-bigquery" },
     { name = "google-cloud-resource-manager" },
     { name = "google-cloud-storage" },
+    { name = "google-genai" },
     { name = "packaging" },
     { name = "proto-plus" },
     { name = "protobuf" },
@@ -1362,9 +1363,9 @@ dependencies = [
     { name = "shapely" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/31/a2/687b70ad2f6c4c3ac007f0c61454cc00174e15cdbf78d39198093c41a7b9/google_cloud_aiplatform-1.87.0.tar.gz", hash = "sha256:3628c573d677d72c7ad62e9c898ff7073c915241e86fd563ff2ee581d281e494", size = 9029058 }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/e9/4343714ae0b3361e7b5dc3c31ae8a884f6b5854806072dce85f50bf37e6a/google_cloud_aiplatform-1.96.0.tar.gz", hash = "sha256:c704bf2409d3aca548df5cf036e6e54adf6acf8c114b01a926925e4c65085a53", size = 9201786 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/c9/973f7618c29938c90f442031d23b221159032cd83e5d6e2b7b5a3b0e60fa/google_cloud_aiplatform-1.87.0-py2.py3-none-any.whl", hash = "sha256:23421cb288550e1b35c5a81f471618e0c34c32dfc73db895498ac01c9a5fa46c", size = 7539298 },
+    { url = "https://files.pythonhosted.org/packages/bc/e6/fe00d5871137f4172e512c1844dfd010ea87e62cefcbc2d4760a416f0ebc/google_cloud_aiplatform-1.96.0-py2.py3-none-any.whl", hash = "sha256:fca9edab98caf354f415285bbcf4a282b7015b58b82fab7fb422d2a535940b8f", size = 7665371 },
 ]
 
 [[package]]
@@ -1518,6 +1519,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/76/29/fc20f5ec36eac1eea0d0b2de4118c774c5f59c513f2a8630d4db6991f3e0/google_crc32c-1.6.0-cp312-cp312-win_amd64.whl", hash = "sha256:7aec8e88a3583515f9e0957fe4f5f6d8d4997e36d0f61624e70469771584c760", size = 33445 },
     { url = "https://files.pythonhosted.org/packages/e7/ff/ed48d136b65ddc61f5aef6261c58cd817c8cd60640b16680e5419fb17018/google_crc32c-1.6.0-pp310-pypy310_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:48abd62ca76a2cbe034542ed1b6aee851b6f28aaca4e6551b5599b6f3ef175cc", size = 28057 },
     { url = "https://files.pythonhosted.org/packages/14/fb/54deefe679b7d1c1cc81d83396fcf28ad1a66d213bddeb275a8d28665918/google_crc32c-1.6.0-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:18e311c64008f1f1379158158bb3f0c8d72635b9eb4f9545f8cf990c5668e59d", size = 27866 },
+]
+
+[[package]]
+name = "google-genai"
+version = "1.18.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "google-auth" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/c2/4dac4192aa3f1273d117b54002bde9df565becd0fb5489ec1f58777ce2a3/google_genai-1.18.0.tar.gz", hash = "sha256:242a02df3248e291f03e37019ce5a1c8a21a14ec245b59668c9f2b4d8965295e", size = 197394 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/db/dce044ddf3f272248aa517fb8e525b31685b483210a8e08773596dbcc611/google_genai-1.18.0-py3-none-any.whl", hash = "sha256:3527bb93c8306e725401aca0a0a684610bbf1ef9aa61c2ed3333a695f43dc9af", size = 199485 },
 ]
 
 [[package]]
@@ -5297,23 +5316,23 @@ wheels = [
 
 [[package]]
 name = "types-pyyaml"
-version = "6.0.12.20250326"
+version = "6.0.12.20250516"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/66/f58e386be67589d5c3c9c0a368600783ac1321b7e6ee213c8f51848dbf0c/types_pyyaml-6.0.12.20250326.tar.gz", hash = "sha256:5e2d86d8706697803f361ba0b8188eef2999e1c372cd4faee4ebb0844b8a4190", size = 17346 }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/22/59e2aeb48ceeee1f7cd4537db9568df80d62bdb44a7f9e743502ea8aab9c/types_pyyaml-6.0.12.20250516.tar.gz", hash = "sha256:9f21a70216fc0fa1b216a8176db5f9e0af6eb35d2f2932acb87689d03a5bf6ba", size = 17378 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/1e/5609fea65117db83cc060342d4f6810f3cf1d3453b9f81bfe5f03f679633/types_pyyaml-6.0.12.20250326-py3-none-any.whl", hash = "sha256:961871cfbdc1ad8ae3cb6ae3f13007262bcfc168adc513119755a6e4d5d7ed65", size = 20398 },
+    { url = "https://files.pythonhosted.org/packages/99/5f/e0af6f7f6a260d9af67e1db4f54d732abad514252a7a378a6c4d17dd1036/types_pyyaml-6.0.12.20250516-py3-none-any.whl", hash = "sha256:8478208feaeb53a34cb5d970c56a7cd76b72659442e733e268a94dc72b2d0530", size = 20312 },
 ]
 
 [[package]]
 name = "types-requests"
-version = "2.32.0.20250306"
+version = "2.32.4.20250611"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/1a/beaeff79ef9efd186566ba5f0d95b44ae21f6d31e9413bcfbef3489b6ae3/types_requests-2.32.0.20250306.tar.gz", hash = "sha256:0962352694ec5b2f95fda877ee60a159abdf84a0fc6fdace599f20acb41a03d1", size = 23012 }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/7f/73b3a04a53b0fd2a911d4ec517940ecd6600630b559e4505cc7b68beb5a0/types_requests-2.32.4.20250611.tar.gz", hash = "sha256:741c8777ed6425830bf51e54d6abe245f79b4dcb9019f1622b773463946bf826", size = 23118 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/26/645d89f56004aa0ba3b96fec27793e3c7e62b40982ee069e52568922b6db/types_requests-2.32.0.20250306-py3-none-any.whl", hash = "sha256:25f2cbb5c8710b2022f8bbee7b2b66f319ef14aeea2f35d80f18c9dbf3b60a0b", size = 20673 },
+    { url = "https://files.pythonhosted.org/packages/3d/ea/0be9258c5a4fa1ba2300111aa5a0767ee6d18eb3fd20e91616c12082284d/types_requests-2.32.4.20250611-py3-none-any.whl", hash = "sha256:ad2fe5d3b0cb3c2c902c8815a70e7fb2302c4b8c1f77bdcd738192cdb3878072", size = 20643 },
 ]
 
 [[package]]

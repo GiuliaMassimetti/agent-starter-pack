@@ -46,6 +46,16 @@ locals {
     ".cloudbuild/**",
   ]
 
+  makefile_usability_included_files = [
+    "src/cli/**",
+    "src/base_template/**",
+    "src/deployment_targets/**",
+    "tests/integration/test_makefile_usability.py",
+    "pyproject.toml",
+    "uv.lock",
+    ".cloudbuild/**",
+  ]
+
   # Define a local variable for agent/deployment combinations
   agent_testing_combinations = [
     {
@@ -84,9 +94,17 @@ locals {
       name  = "live_api-cloud_run"
       value = "live_api,cloud_run"
     },
+    {
+      name  = "adk_base-cloud_run-alloydb"
+      value = "adk_base,cloud_run,--session-type,alloydb"
+    },
+    {
+      name  = "adk_base-cloud_run-agent_engine"
+      value = "adk_base,cloud_run,--session-type,agent_engine"
+    },
   ]
 
-  agent_testing_included_files = { for combo in local.agent_testing_combinations :
+agent_testing_included_files = { for combo in local.agent_testing_combinations :
     combo.name => [
       # Only include files for the specific agent being tested
       "agents/${split(",", combo.value)[0]}/**",
@@ -102,6 +120,18 @@ locals {
     ]
   }
   e2e_agent_deployment_combinations = [
+    {
+      name  = "adk_base-agent_engine-github"
+      value = "adk_base,agent_engine,--cicd-runner,github_actions"
+    },
+    {
+      name  = "adk_base-cloud_run-github"
+      value = "adk_base,cloud_run,--cicd-runner,github_actions"
+    },
+    {
+      name = "agentic_rag-agent_engine-vertex_ai_search-github"
+      value = "agentic_rag,agent_engine,--include-data-ingestion,--datastore,vertex_ai_search,--cicd-runner,github_actions"
+    },
     {
       name  = "adk_base-agent_engine"
       value = "adk_base,agent_engine"
@@ -126,16 +156,34 @@ locals {
       name  = "live_api-cloud_run"
       value = "live_api,cloud_run"
     },
+    {
+      name  = "adk_base-cloud_run-alloydb"
+      value = "adk_base,cloud_run,--session-type,alloydb"
+    },
   ]
-  
   # Create a safe trigger name by replacing underscores with hyphens and dots with hyphens
   # This ensures we have valid trigger names that don't exceed character limits
   trigger_name_safe = { for combo in local.agent_testing_combinations :
       combo.name => replace(replace(combo.name, "_", "-"), ".", "-")
     }
 
-  e2e_agent_deployment_included_files = { for combo in local.agent_testing_combinations :
-    combo.name => [
+  # Create safe trigger names for e2e deployment combinations
+  e2e_trigger_name_safe = { for combo in local.e2e_agent_deployment_combinations :
+      combo.name => replace(replace(combo.name, "_", "-"), ".", "-")
+    }
+
+  e2e_agent_deployment_included_files = { for combo in local.e2e_agent_deployment_combinations :
+    combo.name => combo.name == "adk_base-cloud_run-alloydb" ? [
+      "src/deployment_targets/cloud_run/**",
+      "pyproject.toml",
+    ] : substr(combo.name, 0, 11) == "agentic_rag" ? [
+      "agents/agentic_rag/**",
+      "src/data_ingestion/**",
+      "pyproject.toml",
+    ] : substr(combo.name, 0, 8) == "live_api" ? [
+      "agents/live_api/**",
+      "pyproject.toml",
+    ] : [
       # Only include files for the specific agent being tested
       "agents/${split(",", combo.value)[0]}/**",
       # Common files that affect all agents
@@ -277,7 +325,7 @@ resource "google_cloudbuild_trigger" "pr_templated_agents_test" {
 resource "google_cloudbuild_trigger" "main_e2e_deployment_test" {
   for_each = { for combo in local.e2e_agent_deployment_combinations : combo.name => combo }
 
-  name            = "e2e-deploy-${local.trigger_name_safe[each.key]}"
+  name            = "e2e-deploy-${local.e2e_trigger_name_safe[each.key]}"
   project         = var.cicd_runner_project_id
   location        = var.region
   description     = "Trigger for E2E deployment tests on main branch: ${each.value.name}"
@@ -301,4 +349,78 @@ resource "google_cloudbuild_trigger" "main_e2e_deployment_test" {
     _E2E_STAGING_PROJECT = var.e2e_test_project_mapping.staging
     _E2E_PROD_PROJECT    = var.e2e_test_project_mapping.prod
   }
+}
+
+# f. Create Remote Template Test trigger for PR requests
+resource "google_cloudbuild_trigger" "pr_test_remote_template" {
+  name            = "pr-test-remote-template"
+  project         = var.cicd_runner_project_id
+  location        = var.region
+  description     = "Trigger for PR checks on remote templating"
+  service_account = resource.google_service_account.cicd_runner_sa.id
+
+  repository_event_config {
+    repository = local.repository_path
+    pull_request {
+      branch          = "main"
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename           = ".cloudbuild/ci/test_remote_template.yaml"
+  included_files     = local.common_included_files
+  ignored_files      = local.common_ignored_files
+  include_build_logs = "INCLUDE_BUILD_LOGS_WITH_STATUS"
+}
+
+# g. Create Makefile usability Test trigger for PR requests
+resource "google_cloudbuild_trigger" "pr_test_makefile" {
+  name            = "pr-test-makefile"
+  project         = var.cicd_runner_project_id
+  location        = var.region
+  description     = "Trigger for PR checks on Makefile usability"
+  service_account = resource.google_service_account.cicd_runner_sa.id
+
+  repository_event_config {
+    repository = local.repository_path
+    pull_request {
+      branch          = "main"
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename           = ".cloudbuild/ci/test_makefile.yaml"
+  included_files     = local.makefile_usability_included_files
+  ignored_files      = local.common_ignored_files
+  include_build_logs = "INCLUDE_BUILD_LOGS_WITH_STATUS"
+}
+
+# h. Create Pipeline Parity Test trigger for PR requests
+resource "google_cloudbuild_trigger" "pr_test_pipeline_parity" {
+  name            = "pr-test-pipeline-parity"
+  project         = var.cicd_runner_project_id
+  location        = var.region
+  description     = "Trigger for PR checks on pipeline parity between GitHub Actions and Cloud Build"
+  service_account = resource.google_service_account.cicd_runner_sa.id
+
+  repository_event_config {
+    repository = local.repository_path
+    pull_request {
+      branch          = "main"
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename       = ".cloudbuild/ci/test_pipeline_parity.yaml"
+  included_files = [
+    "tests/integration/test_pipeline_parity.py",
+    "src/cli/**",
+    ".cloudbuild/**",
+    "src/base_template/**/.github/**",
+    "src/base_template/**/.cloudbuild/**",
+    "pyproject.toml",
+    "uv.lock",
+  ]
+  ignored_files      = local.common_ignored_files
+  include_build_logs = "INCLUDE_BUILD_LOGS_WITH_STATUS"
 }

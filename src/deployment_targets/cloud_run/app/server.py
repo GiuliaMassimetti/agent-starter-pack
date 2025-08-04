@@ -14,17 +14,31 @@
 {% if "adk" in cookiecutter.tags %}
 import os
 
+import google.auth
 from fastapi import FastAPI
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as google_cloud_logging
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, export
+{%- if cookiecutter.session_type == "agent_engine" %}
+from vertexai import agent_engines
+{%- endif %}
 
+from app.utils.gcs import create_bucket_if_not_exists
 from app.utils.tracing import CloudTraceLoggingSpanExporter
 from app.utils.typing import Feedback
 
+_, project_id = google.auth.default()
 logging_client = google_cloud_logging.Client()
 logger = logging_client.logger(__name__)
+allow_origins = (
+    os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
+)
+
+bucket_name = f"gs://{project_id}-{{cookiecutter.project_name}}-logs-data"
+create_bucket_if_not_exists(
+    bucket_name=bucket_name, project=project_id, location="us-central1"
+)
 
 provider = TracerProvider()
 processor = export.BatchSpanProcessor(CloudTraceLoggingSpanExporter())
@@ -32,8 +46,46 @@ provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-app: FastAPI = get_fast_api_app(agent_dir=AGENT_DIR, web=False)
 
+{%- if cookiecutter.session_type == "alloydb" %}
+# AlloyDB session configuration
+db_user = os.environ.get("DB_USER", "postgres")
+db_name = os.environ.get("DB_NAME", "postgres")
+db_pass = os.environ.get("DB_PASS")
+db_host = os.environ.get("DB_HOST")
+
+# Set session_service_uri if database credentials are available
+session_service_uri = None
+if db_host and db_pass:
+    session_service_uri = f"postgresql://{db_user}:{db_pass}@{db_host}:5432/{db_name}"
+{%- elif cookiecutter.session_type == "agent_engine" %}
+# Agent Engine session configuration
+# Use environment variable for agent name, default to project name
+agent_name = os.environ.get("AGENT_ENGINE_SESSION_NAME", "{{cookiecutter.project_name}}")
+
+# Check if an agent with this name already exists
+existing_agents = list(agent_engines.list(filter=f"display_name={agent_name}"))
+
+if existing_agents:
+    # Use the existing agent
+    agent_engine = existing_agents[0]
+else:
+    # Create a new agent if none exists
+    agent_engine = agent_engines.create(display_name=agent_name)
+
+session_service_uri = f"agentengine://{agent_engine.resource_name}"
+{%- else %}
+# In-memory session configuration - no persistent storage
+session_service_uri = None
+{%- endif %}
+
+app: FastAPI = get_fast_api_app(
+    agents_dir=AGENT_DIR,
+    web=True,
+    artifact_service_uri=bucket_name,
+    allow_origins=allow_origins,
+    session_service_uri=session_service_uri,
+)
 app.title = "{{cookiecutter.project_name}}"
 app.description = "API for interacting with the Agent {{cookiecutter.project_name}}"
 {%- else %}
@@ -105,7 +157,7 @@ def stream_messages(
     set_tracing_properties(config)
     input_dict = input.model_dump()
 
-    for data in agent.stream(input_dict, config=config, stream_mode="messages"):
+    for data in agent.stream(input_dict, config=config, stream_mode="messages"):  # type: ignore[arg-type]
         yield dumps(data) + "\n"
 
 

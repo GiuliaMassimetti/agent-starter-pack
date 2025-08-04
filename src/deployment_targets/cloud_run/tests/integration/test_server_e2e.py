@@ -62,6 +62,10 @@ def start_server() -> subprocess.Popen[str]:
     ]
     env = os.environ.copy()
     env["INTEGRATION_TEST"] = "TRUE"
+{%- if cookiecutter.session_type == "agent_engine" %}
+    # Set test-specific agent engine session name
+    env["AGENT_ENGINE_SESSION_NAME"] = "test-{{cookiecutter.project_name}}"
+{%- endif %}
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -122,16 +126,19 @@ def test_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
     logger.info("Starting chat stream test")
 {% if "adk" in cookiecutter.tags %}
     # Create session first
-    user_id = "user_123"
-    session_id = "session_abc"
-    session_data = {"state": {"preferred_language": "English", "visit_count": 5}}
+    user_id = "test_user_123"
+    session_data = {"state": {"preferred_language": "English", "visit_count": 1}}
+
+    session_url = f"{BASE_URL}/apps/app/users/{user_id}/sessions"
     session_response = requests.post(
-        f"{BASE_URL}/apps/app/users/{user_id}/sessions/{session_id}",
+        session_url,
         headers=HEADERS,
         json=session_data,
-        timeout=10,
+        timeout=60,
     )
     assert session_response.status_code == 200
+    logger.info(f"Session creation response: {session_response.json()}")
+    session_id = session_response.json()["id"]
 
     # Then send chat message
     data = {
@@ -157,7 +164,7 @@ def test_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
     }
 {% endif %}
     response = requests.post(
-        STREAM_URL, headers=HEADERS, json=data, stream=True, timeout=10
+        STREAM_URL, headers=HEADERS, json=data, stream=True, timeout=60
     )
     assert response.status_code == 200
 
@@ -247,3 +254,34 @@ def test_collect_feedback(server_fixture: subprocess.Popen[str]) -> None:
         FEEDBACK_URL, json=feedback_data, headers=HEADERS, timeout=10
     )
     assert response.status_code == 200
+{%- if cookiecutter.session_type == "agent_engine" %}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_agent_engine_sessions() -> None:
+    """Cleanup agent engine sessions created during tests."""
+    yield  # Run tests first
+
+    # Cleanup after tests complete
+    from vertexai import agent_engines
+
+    try:
+        # Use same environment variable as server, default to project name
+        agent_name = os.environ.get(
+            "AGENT_ENGINE_SESSION_NAME", "{{cookiecutter.project_name}}"
+        )
+
+        # Find and delete agent engines with this name
+        existing_agents = list(agent_engines.list(filter=f"display_name={agent_name}"))
+
+        for agent_engine in existing_agents:
+            try:
+                agent_engines.delete(resource_name=agent_engine.name)
+                logger.info(f"Cleaned up agent engine: {agent_engine.name}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cleanup agent engine {agent_engine.name}: {e}"
+                )
+    except Exception as e:
+        logger.warning(f"Failed to cleanup agent engine sessions: {e}")
+{%- endif %}

@@ -32,7 +32,7 @@ features:
     details: Ship reliable agents with production-ready infra (Cloud Run / Agent Engine) featuring monitoring, observability, and CI/CD.
   - icon: 🛠️
     title: Customize & Extend
-    details: Adapt and enhance templates and infrastructure for your specific use case.
+    details: Adapt and enhance templates for your specific use case, or create your own.
 ---
 
 ::: tip ⭐ Like Agent Starter Pack?

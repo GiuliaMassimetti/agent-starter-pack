@@ -66,6 +66,7 @@ def start_server() -> subprocess.Popen[str]:
         text=True,
         bufsize=1,
         env=env,
+        encoding="utf-8",
     )
 
     # Start threads to log stdout and stderr in real-time
@@ -107,7 +108,12 @@ def server_fixture(request: Any) -> Iterator[subprocess.Popen[str]]:
     def stop_server() -> None:
         logger.info("Stopping server process")
         server_process.terminate()
-        server_process.wait()
+        try:
+            server_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("Server process did not terminate, killing it")
+            server_process.kill()
+            server_process.wait()
         logger.info("Server process stopped")
 
     request.addfinalizer(stop_server)

@@ -18,7 +18,7 @@ import json
 import subprocess
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, Mock, mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 from click.testing import CliRunner
@@ -46,15 +46,6 @@ def mock_verify_credentials() -> MagicMock:
     """Mock credentials verification"""
     with patch("src.cli.commands.setup_cicd.verify_credentials") as mock:
         mock.return_value = {"account": "test@example.com", "project": "test-project"}
-        yield mock
-
-
-@pytest.fixture
-def mock_e2e_deployment() -> MagicMock:
-    """Mock E2EDeployment class"""
-    with patch("src.cli.commands.setup_cicd.E2EDeployment") as mock:
-        mock_instance = Mock()
-        mock.return_value = mock_instance
         yield mock
 
 
@@ -166,13 +157,14 @@ class TestSetupCICD:
     ) -> None:
         """Test Git repository setup"""
         config = ProjectConfig(
-            dev_project_id="test-dev",
             staging_project_id="test-staging",
             prod_project_id="test-prod",
             cicd_project_id="test-cicd",
             agent="test-agent",
             deployment_target="cloud-run",
             repository_name="test-repo",
+            repository_owner="test-owner",
+            dev_project_id="test-dev",
         )
 
         # Test when .git doesn't exist
@@ -182,7 +174,6 @@ class TestSetupCICD:
             # Configure mock_run_command behavior
             mock_run_command.side_effect = [
                 MagicMock(returncode=0),  # git init
-                MagicMock(stdout="test-user", returncode=0),  # gh api user
                 subprocess.CalledProcessError(
                     1, ["git", "remote", "get-url"]
                 ),  # git remote get-url fails
@@ -191,15 +182,10 @@ class TestSetupCICD:
 
             github_username = setup_git_repository(config)
 
-            assert github_username == "test-user"
+            assert github_username == "test-owner"
 
             # Verify git init was called
             mock_run_command.assert_any_call(["git", "init", "-b", "main"])
-
-            # Verify GitHub username was fetched
-            mock_run_command.assert_any_call(
-                ["gh", "api", "user", "--jq", ".login"], capture_output=True
-            )
 
             # Verify remote was added
             mock_run_command.assert_any_call(
@@ -208,8 +194,10 @@ class TestSetupCICD:
                     "remote",
                     "add",
                     "origin",
-                    "https://github.com/test-user/test-repo.git",
-                ]
+                    "https://github.com/test-owner/test-repo.git",
+                ],
+                capture_output=True,
+                check=True,
             )
 
         # Test when .git exists and remote is configured
@@ -218,13 +206,12 @@ class TestSetupCICD:
 
             mock_run_command.reset_mock()
             mock_run_command.side_effect = [
-                MagicMock(stdout="test-user", returncode=0),  # gh api user
                 MagicMock(returncode=0),  # git remote get-url succeeds
             ]
 
             github_username = setup_git_repository(config)
 
-            assert github_username == "test-user"
+            assert github_username == "test-owner"
 
             # Verify git init was not called
             assert not any(
@@ -246,7 +233,7 @@ class TestSetupCICD:
         # Create test build_triggers.tf with initial content
         build_triggers_path = tf_dir / "build_triggers.tf"
         initial_content = """
-        depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services]
+        depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
         repository = "projects/${var.cicd_runner_project_id}/locations/${var.region}/connections/${var.host_connection_name}/repositories/${var.repository_name}"
         """
         build_triggers_path.write_text(initial_content)
@@ -260,7 +247,7 @@ class TestSetupCICD:
         # Verify the changes
         assert "google_cloudbuildv2_repository.repo" in modified_content
         assert (
-            "depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.shared_services, google_cloudbuildv2_repository.repo]"
+            "depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services, google_cloudbuildv2_repository.repo]"
             in modified_content
         )
 
@@ -288,6 +275,11 @@ class TestSetupCICD:
                 mock_response.stdout = "[]"
                 mock_response.returncode = 0
                 print("Mocking gcloud services list")
+            # Mock GitHub auth status with scopes
+            elif "gh" in command and "auth" in command and "status" in command:
+                mock_response.stdout = "- Token scopes: 'repo', 'workflow'\n"
+                mock_response.returncode = 0
+                print("Mocking GitHub auth status")
             # Mock GitHub username API call
             elif "gh" in command and "api" in command and "user" in command:
                 mock_response.stdout = "test-user"
@@ -352,7 +344,7 @@ class TestSetupCICD:
             "test-installation-id",
         )
 
-        # Mock E2EDeployment
+        # Mock required dependencies
         with (
             patch("pathlib.Path.exists", return_value=True),
             patch("shutil.copy2"),
@@ -361,15 +353,12 @@ class TestSetupCICD:
             patch(
                 "src.cli.utils.cicd.run_command", side_effect=run_command_side_effect
             ),
-            patch("src.cli.commands.setup_cicd.E2EDeployment") as mock_e2e,
             patch(
                 "click.prompt",
                 side_effect=[
-                    "1",  # Git provider selection
                     "1",  # Repository option (1 for new repo)
                     "test-repo",  # Repository name
                     "test-user",  # Repository owner
-                    "y",  # Confirmation prompt
                 ],
             ),
             patch("click.confirm", return_value=True),
@@ -379,8 +368,6 @@ class TestSetupCICD:
                 return_value={"account": "test@example.com", "project": "test-project"},
             ),
         ):
-            mock_e2e_instance = MagicMock()
-            mock_e2e.return_value = mock_e2e_instance
             mock_glob.return_value = [Path("mock.tf")]
 
             print("\nInvoking setup_cicd command...")
@@ -403,7 +390,6 @@ class TestSetupCICD:
                 print(f"\nCommand exit code: {result.exit_code}")
 
             assert result.exit_code == 0
-            mock_create_github_connection.assert_called_once()
             mock_setup_terraform_backend.assert_called()
 
     def test_setup_cicd_invalid_working_directory(self, mock_cwd: MagicMock) -> None:
@@ -459,7 +445,6 @@ class TestSetupCICD:
         mock_cwd: MagicMock,
         mock_console: MagicMock,
         mock_run_command: MagicMock,
-        mock_e2e_deployment: MagicMock,
         mock_terraform_files: None,
     ) -> None:
         """Test setup with GitHub PAT authentication"""
@@ -473,6 +458,10 @@ class TestSetupCICD:
             # Mock gcloud services list
             if "gcloud" in command and "services" in command and "list" in command:
                 mock_response.stdout = "[]"
+                mock_response.returncode = 0
+            # Mock GitHub auth status with scopes
+            elif "gh" in command and "auth" in command and "status" in command:
+                mock_response.stdout = "- Token scopes: 'repo', 'workflow'\n"
                 mock_response.returncode = 0
             # Mock GitHub username API call
             elif "gh" in command and "api" in command and "user" in command:
@@ -491,19 +480,16 @@ class TestSetupCICD:
 
         mock_run_command.side_effect = run_command_side_effect
 
-        # Mock E2EDeployment
+        # Mock required dependencies
         with (
             patch("pathlib.Path.exists", return_value=True) as mock_exists,
             patch("src.cli.utils.cicd.ensure_apis_enabled"),
             patch(
                 "src.cli.utils.cicd.run_command", side_effect=run_command_side_effect
             ),
-            patch("src.cli.commands.setup_cicd.E2EDeployment") as mock_e2e,
             patch("builtins.open", mock_open()),
             patch("shutil.copy2"),
         ):
-            mock_e2e_instance = MagicMock()
-            mock_e2e.return_value = mock_e2e_instance
 
             def exists_side_effect() -> bool:
                 return True
@@ -519,8 +505,6 @@ class TestSetupCICD:
                     "test-prod",
                     "--cicd-project",
                     "test-cicd",
-                    "--git-provider",
-                    "github",
                     "--github-pat",
                     "test-pat",
                     "--github-app-installation-id",
@@ -537,25 +521,3 @@ def mock_path_exists() -> MagicMock:
     """Mock Path.exists() to simulate pyproject.toml presence"""
     with patch("pathlib.Path.exists", return_value=True):
         yield
-
-
-def test_setup_cicd_invalid_git_provider(mock_path_exists: MagicMock) -> None:
-    """Test setup_cicd fails with invalid git provider"""
-    runner = CliRunner()
-
-    result = runner.invoke(
-        setup_cicd,
-        [
-            "--staging-project",
-            "test-staging",
-            "--prod-project",
-            "test-prod",
-            "--cicd-project",
-            "test-cicd",
-            "--git-provider",
-            "gitlab",  # Currently unsupported
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "Invalid value for '--git-provider'" in result.output

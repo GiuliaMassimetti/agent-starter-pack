@@ -12,29 +12,152 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Callable
 
 import click
+import tomllib
 from click.core import ParameterSource
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
 
-from ..utils.datastores import DATASTORE_TYPES
+from ..utils.datastores import DATASTORE_TYPES, DATASTORES
 from ..utils.gcp import verify_credentials, verify_vertex_connection
-from ..utils.logging import handle_cli_error
+from ..utils.logging import display_welcome_banner, handle_cli_error
+from ..utils.remote_template import (
+    fetch_remote_template,
+    get_base_template_name,
+    load_remote_template_config,
+    merge_template_configs,
+    parse_agent_spec,
+)
 from ..utils.template import (
     get_available_agents,
+    get_deployment_targets,
     get_template_path,
     load_template_config,
     process_template,
+    prompt_cicd_runner_selection,
     prompt_datastore_selection,
     prompt_deployment_target,
+    prompt_session_type_selection,
 )
 
 console = Console()
+
+# Export the shared decorator for use by other commands
+__all__ = ["create", "shared_template_options"]
+
+
+def shared_template_options(f: Callable) -> Callable:
+    """Decorator to add shared options for template-based commands."""
+    # Apply options in reverse order since decorators are applied bottom-up
+    f = click.option(
+        "--skip-checks",
+        is_flag=True,
+        help="Skip verification checks for GCP and Vertex AI",
+        default=False,
+    )(f)
+    f = click.option(
+        "--region",
+        help="GCP region for deployment (default: us-central1)",
+        default="us-central1",
+    )(f)
+    f = click.option(
+        "--auto-approve", is_flag=True, help="Skip credential confirmation prompts"
+    )(f)
+    f = click.option("--debug", is_flag=True, help="Enable debug logging")(f)
+    f = click.option(
+        "--session-type",
+        type=click.Choice(["in_memory", "alloydb", "agent_engine"]),
+        help="Type of session storage to use",
+    )(f)
+    f = click.option(
+        "--datastore",
+        "-ds",
+        type=click.Choice(DATASTORE_TYPES),
+        help="Type of datastore to use for data ingestion (requires --include-data-ingestion)",
+    )(f)
+    f = click.option(
+        "--include-data-ingestion",
+        "-i",
+        is_flag=True,
+        help="Include data ingestion pipeline in the project",
+    )(f)
+    f = click.option(
+        "--cicd-runner",
+        type=click.Choice(["google_cloud_build", "github_actions"]),
+        help="CI/CD runner to use",
+    )(f)
+    f = click.option(
+        "--deployment-target",
+        "-d",
+        type=click.Choice(["agent_engine", "cloud_run"]),
+        help="Deployment target name",
+    )(f)
+    return f
+
+
+def get_available_base_templates() -> list[str]:
+    """Get list of available base templates for inheritance.
+
+    Returns:
+        List of base template names.
+    """
+    agents = get_available_agents()
+    return sorted([agent_info["name"] for agent_info in agents.values()])
+
+
+def validate_base_template(base_template: str) -> bool:
+    """Validate that a base template exists.
+
+    Args:
+        base_template: Name of the base template to validate
+
+    Returns:
+        True if the base template exists, False otherwise
+    """
+    available_templates = get_available_base_templates()
+    return base_template in available_templates
+
+
+def get_standard_ignore_patterns() -> Callable[[str, list[str]], list[str]]:
+    """Get standard ignore patterns for copying directories.
+
+    Returns:
+        A callable that can be used with shutil.copytree's ignore parameter.
+    """
+    exclude_dirs = {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".pytest_cache",
+        "node_modules",
+        ".next",
+        "dist",
+        "build",
+        ".DS_Store",
+        ".vscode",
+        ".idea",
+        "*.egg-info",
+        ".mypy_cache",
+        ".coverage",
+        "htmlcov",
+        ".tox",
+        ".cache",
+    }
+
+    def ignore_patterns(dir: str, files: list[str]) -> list[str]:
+        return [f for f in files if f in exclude_dirs or f.startswith(".backup_")]
+
+    return ignore_patterns
 
 
 def normalize_project_name(project_name: str) -> str:
@@ -74,26 +197,11 @@ def normalize_project_name(project_name: str) -> str:
 @click.command()
 @click.pass_context
 @click.argument("project_name")
-@click.option("--agent", "-a", help="agent name or number to use")
 @click.option(
-    "--deployment-target",
-    "-d",
-    type=click.Choice(["agent_engine", "cloud_run"]),
-    help="Deployment target name",
+    "--agent",
+    "-a",
+    help="Template identifier to use. Can be a local agent name (e.g., `chat_agent`), a local path (`local@/path/to/template`), an `adk-samples` shortcut (e.g., `adk@data-science`), or a remote Git URL. Both shorthand (e.g., `github.com/org/repo/path@main`) and full URLs from your browser (e.g., `https://github.com/org/repo/tree/main/path`) are supported. Lists available local templates if omitted.",
 )
-@click.option(
-    "--include-data-ingestion",
-    "-i",
-    is_flag=True,
-    help="Include data ingestion pipeline in the project",
-)
-@click.option(
-    "--datastore",
-    "-ds",
-    type=click.Choice(DATASTORE_TYPES),
-    help="Type of datastore to use for data ingestion (requires --include-data-ingestion)",
-)
-@click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.option(
     "--output-dir",
     "-o",
@@ -101,41 +209,37 @@ def normalize_project_name(project_name: str) -> str:
     help="Output directory for the project (default: current directory)",
 )
 @click.option(
-    "--auto-approve", is_flag=True, help="Skip credential confirmation prompts"
-)
-@click.option(
-    "--region",
-    help="GCP region for deployment (default: us-central1)",
-    default="us-central1",
-)
-@click.option(
-    "--skip-checks",
+    "--in-folder",
+    "-if",
     is_flag=True,
-    help="Skip verification checks for uv, GCP and Vertex AI",
+    help="Template files directly into the current directory instead of creating a new project directory",
     default=False,
 )
+@shared_template_options
 @handle_cli_error
 def create(
     ctx: click.Context,
     project_name: str,
     agent: str | None,
     deployment_target: str | None,
+    cicd_runner: str | None,
     include_data_ingestion: bool,
     datastore: str | None,
+    session_type: str | None,
     debug: bool,
     output_dir: str | None,
     auto_approve: bool,
     region: str,
     skip_checks: bool,
+    in_folder: bool,
+    base_template: str | None = None,
+    skip_welcome: bool = False,
 ) -> None:
     """Create GCP-based AI agent projects from templates."""
     try:
-        # Display welcome banner
-        console.print("\n=== GCP Agent Starter Pack :rocket:===", style="bold blue")
-        console.print("Welcome to the Agent Starter Pack!")
-        console.print(
-            "This tool will help you create an end-to-end production-ready AI agent in Google Cloud!\n"
-        )
+        # Display welcome banner (unless skipped)
+        if not skip_welcome:
+            display_welcome_banner(agent)
         # Validate project name
         if len(project_name) > 26:
             console.print(
@@ -156,67 +260,211 @@ def create(
         destination_dir = pathlib.Path(output_dir) if output_dir else pathlib.Path.cwd()
         destination_dir = destination_dir.resolve()  # Convert to absolute path
 
-        # Check if project would exist in output directory
-        project_path = destination_dir / project_name
-        if project_path.exists():
-            console.print(
-                f"Error: Project directory '{project_path}' already exists",
-                style="bold red",
-            )
-            return
+        if in_folder:
+            # For in-folder templating, use the current directory directly
+            project_path = destination_dir
+            # In-folder mode is permissive - we assume the user wants to enhance their existing repo
+
+            # Create backup of entire directory before in-folder templating
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_dir = project_path / f".backup_{project_path.name}_{timestamp}"
+
+            console.print("📦 [blue]Creating backup before modification...[/blue]")
+
+            try:
+                shutil.copytree(
+                    project_path, backup_dir, ignore=get_standard_ignore_patterns()
+                )
+                console.print(f"Backup created: [cyan]{backup_dir.name}[/cyan]")
+            except Exception as e:
+                console.print(
+                    f"⚠️  [yellow]Warning: Could not create backup: {e}[/yellow]"
+                )
+                if not auto_approve:
+                    if not click.confirm("Continue without backup?", default=True):
+                        console.print("✋ [red]Operation cancelled.[/red]")
+                        return
+
+            console.print()
+        else:
+            # Check if project would exist in output directory
+            project_path = destination_dir / project_name
+            if project_path.exists():
+                console.print(
+                    f"Error: Project directory '{project_path}' already exists",
+                    style="bold red",
+                )
+                return
+
+        # Agent selection - handle remote templates
+        selected_agent = None
+        template_source_path = None
+        temp_dir_to_clean = None
+
+        if agent:
+            if agent.startswith("local@"):
+                path_str = agent.split("@", 1)[1]
+                local_path = pathlib.Path(path_str).resolve()
+                if not local_path.is_dir():
+                    raise click.ClickException(
+                        f"Local path not found or not a directory: {local_path}"
+                    )
+
+                # Create a temporary directory and copy the local template to it
+                temp_dir = tempfile.mkdtemp(prefix="asp_local_template_")
+                temp_dir_to_clean = temp_dir
+                template_source_path = pathlib.Path(temp_dir) / local_path.name
+                shutil.copytree(
+                    local_path,
+                    template_source_path,
+                    ignore=get_standard_ignore_patterns(),
+                )
+
+                selected_agent = f"local_{template_source_path.name}"
+                console.print(f"Using local template: {local_path}")
+                logging.debug(
+                    f"Copied local template to temporary dir: {template_source_path}"
+                )
+            else:
+                # Check if it's a remote template specification
+                remote_spec = parse_agent_spec(agent)
+                if remote_spec:
+                    if remote_spec.is_adk_samples:
+                        console.print(
+                            f"> Fetching template: {remote_spec.template_path}",
+                            style="bold blue",
+                        )
+                    else:
+                        console.print(f"Fetching remote template: {agent}")
+                    template_source_path, temp_dir_path = fetch_remote_template(
+                        remote_spec
+                    )
+                    temp_dir_to_clean = str(temp_dir_path)
+                    selected_agent = f"remote_{hash(agent)}"  # Generate unique name for remote template
+                else:
+                    # Handle local agent selection
+                    agents = get_available_agents()
+                    # First check if it's a valid agent name
+                    if any(p["name"] == agent for p in agents.values()):
+                        selected_agent = agent
+                    else:
+                        # Try numeric agent selection if input is a number
+                        try:
+                            agent_num = int(agent)
+                            if agent_num in agents:
+                                selected_agent = agents[agent_num]["name"]
+                            else:
+                                raise ValueError(f"Invalid agent number: {agent_num}")
+                        except ValueError as err:
+                            raise ValueError(
+                                f"Invalid agent name or number: {agent}"
+                            ) from err
 
         # Agent selection
-        selected_agent = None
-        if agent:
-            agents = get_available_agents()
-            # First check if it's a valid agent name
-            if any(p["name"] == agent for p in agents.values()):
-                selected_agent = agent
-            else:
-                # Try numeric agent selection if input is a number
-                try:
-                    agent_num = int(agent)
-                    if agent_num in agents:
-                        selected_agent = agents[agent_num]["name"]
+        final_agent = selected_agent
+        if not final_agent:
+            if auto_approve:
+                raise click.ClickException(
+                    "Error: --agent is required when running with --auto-approve."
+                )
+            final_agent = display_agent_selection(deployment_target)
+
+            # If browse functionality returned a remote agent spec, process it like CLI input
+            if final_agent and final_agent.startswith("adk@"):
+                # Set agent to the returned spec for remote processing
+                agent = final_agent
+
+                # Process the remote template spec just like CLI input
+                remote_spec = parse_agent_spec(agent)
+                if remote_spec:
+                    if remote_spec.is_adk_samples:
+                        console.print(
+                            f"> Fetching template: {remote_spec.template_path}",
+                            style="bold blue",
+                        )
                     else:
-                        raise ValueError(f"Invalid agent number: {agent_num}")
-                except ValueError as err:
-                    raise ValueError(f"Invalid agent name or number: {agent}") from err
+                        console.print(f"Fetching remote template: {agent}")
+                    template_source_path, temp_dir_path = fetch_remote_template(
+                        remote_spec
+                    )
+                    temp_dir_to_clean = str(temp_dir_path)
+                    final_agent = f"remote_{hash(agent)}"  # Generate unique name for remote template
 
-        final_agent = (
-            selected_agent
-            if selected_agent
-            else display_agent_selection(deployment_target)
-        )
         if debug:
-            logging.debug(f"Selected agent: {agent}")
+            logging.debug(f"Selected agent: {final_agent}")
 
+        # Load template configuration based on whether it's remote or local
+        if template_source_path:
+            # Prepare CLI overrides for remote template config
+            cli_overrides = {}
+            if base_template:
+                cli_overrides["base_template"] = base_template
+
+            # Load remote template config
+            source_config = load_remote_template_config(
+                template_source_path, cli_overrides
+            )
+
+            # Remote templates now work even without pyproject.toml thanks to defaults
+            if debug and source_config:
+                logging.debug(f"Final remote template config: {source_config}")
+
+            # Load base template config for inheritance
+            base_template_name = get_base_template_name(source_config)
+            if debug:
+                logging.debug(f"Using base template: {base_template_name}")
+
+            base_template_path = (
+                pathlib.Path(__file__).parent.parent.parent.parent
+                / "agents"
+                / base_template_name
+                / ".template"
+            )
+            base_config = load_template_config(base_template_path)
+
+            # Merge configs: remote inherits from and overrides base
+            config = merge_template_configs(base_config, source_config)
+            # For remote templates, use the template/ subdirectory as the template source
+            template_path = template_source_path / ".template"
+        else:
+            template_path = (
+                pathlib.Path(__file__).parent.parent.parent.parent
+                / "agents"
+                / final_agent
+                / ".template"
+            )
+            config = load_template_config(template_path)
         # Data ingestion and datastore selection
         if include_data_ingestion or datastore:
-            # If datastore is specified but include_data_ingestion is not, set it to True
             include_data_ingestion = True
-
-            # If include_data_ingestion is True but no datastore is specified, prompt for it
             if not datastore:
-                # Pass a flag to indicate this is from explicit CLI flag
-                datastore = prompt_datastore_selection(final_agent, from_cli_flag=True)
-
+                if auto_approve:
+                    # Default to the first available datastore in non-interactive mode
+                    datastore = next(iter(DATASTORES.keys()))
+                    console.print(
+                        f"Info: --datastore not specified. Defaulting to '{datastore}' in auto-approve mode.",
+                        style="yellow",
+                    )
+                else:
+                    datastore = prompt_datastore_selection(
+                        final_agent, from_cli_flag=True
+                    )
             if debug:
                 logging.debug(f"Data ingestion enabled: {include_data_ingestion}")
                 logging.debug(f"Selected datastore type: {datastore}")
         else:
             # Check if the agent requires data ingestion
-            template_path = (
-                pathlib.Path(__file__).parent.parent.parent.parent
-                / "agents"
-                / final_agent
-                / "template"
-            )
-            config = load_template_config(template_path)
             if config and config.get("settings", {}).get("requires_data_ingestion"):
                 include_data_ingestion = True
-                datastore = prompt_datastore_selection(final_agent)
-
+                if not datastore:
+                    if auto_approve:
+                        datastore = next(iter(DATASTORES.keys()))
+                        console.print(
+                            f"Info: --datastore not specified. Defaulting to '{datastore}' in auto-approve mode.",
+                            style="yellow",
+                        )
+                    else:
+                        datastore = prompt_datastore_selection(final_agent)
                 if debug:
                     logging.debug(
                         f"Data ingestion required by agent: {include_data_ingestion}"
@@ -224,13 +472,90 @@ def create(
                     logging.debug(f"Selected datastore type: {datastore}")
 
         # Deployment target selection
-        final_deployment = (
-            deployment_target
-            if deployment_target
-            else prompt_deployment_target(final_agent)
-        )
+        # For remote templates, we need to use the base template name for deployment target selection
+        deployment_agent_name = final_agent
+        remote_config = None
+        if template_source_path:
+            # Use the base template name from remote config for deployment target selection
+            deployment_agent_name = get_base_template_name(config)
+            remote_config = config
+
+        final_deployment = deployment_target
+        if not final_deployment:
+            available_targets = get_deployment_targets(
+                deployment_agent_name, remote_config=remote_config
+            )
+            if auto_approve:
+                if not available_targets:
+                    raise click.ClickException(
+                        f"Error: No deployment targets available for agent '{deployment_agent_name}'."
+                    )
+                final_deployment = available_targets[0]
+                console.print(
+                    f"Info: --deployment-target not specified. Defaulting to '{final_deployment}' in auto-approve mode.",
+                    style="yellow",
+                )
+            else:
+                final_deployment = prompt_deployment_target(
+                    deployment_agent_name, remote_config=remote_config
+                )
         if debug:
             logging.debug(f"Selected deployment target: {final_deployment}")
+
+        # Session type validation and selection (only for agents that require session management)
+        final_session_type = session_type
+
+        # Check if agent requires session management
+        requires_session = config.get("settings", {}).get("requires_session", False)
+
+        if requires_session:
+            if final_deployment == "agent_engine" and session_type:
+                console.print(
+                    "Error: --session-type cannot be used with agent_engine deployment target. "
+                    "Agent Engine handles session management internally.",
+                    style="bold red",
+                )
+                return
+
+            if (
+                final_deployment is not None
+                and final_deployment in ("cloud_run")
+                and not session_type
+            ):
+                if auto_approve:
+                    final_session_type = "in_memory"
+                    console.print(
+                        "Info: --session-type not specified. Defaulting to 'in_memory' in auto-approve mode.",
+                        style="yellow",
+                    )
+                else:
+                    final_session_type = prompt_session_type_selection()
+        else:
+            # Agents that don't require session management always use in-memory sessions
+            final_session_type = "in_memory"
+            if session_type and session_type != "in_memory":
+                console.print(
+                    "Warning: Session type options are only available for agents that require session management. "
+                    "Using in-memory sessions for this agent.",
+                    style="yellow",
+                )
+
+        if debug and final_session_type:
+            logging.debug(f"Selected session type: {final_session_type}")
+
+        # CI/CD runner selection
+        final_cicd_runner = cicd_runner
+        if not final_cicd_runner:
+            if auto_approve:
+                final_cicd_runner = "google_cloud_build"
+                console.print(
+                    "Info: --cicd-runner not specified. Defaulting to 'google_cloud_build' in auto-approve mode.",
+                    style="yellow",
+                )
+            else:
+                final_cicd_runner = prompt_cicd_runner_selection()
+        if debug:
+            logging.debug(f"Selected CI/CD runner: {final_cicd_runner}")
 
         # Region confirmation (if not explicitly passed)
         if (
@@ -262,7 +587,7 @@ def create(
                 )
                 console.print(
                     "> Please check your authentication settings and permissions. "
-                    "Visit https://cloud.google.com/vertex-ai/docs/authentication for help.",
+                    "> Visit https://cloud.google.com/vertex-ai/docs/authentication for help.",
                     style="yellow",
                 )
                 console.print(
@@ -270,7 +595,10 @@ def create(
                 )
 
         # Process template
-        template_path = get_template_path(final_agent, debug=debug)
+        if not template_source_path:
+            template_path = get_template_path(final_agent, debug=debug)
+        # template_path is already set above for remote templates
+
         if debug:
             logging.debug(f"Template path: {template_path}")
             logging.debug(f"Processing template for project: {project_name}")
@@ -282,22 +610,45 @@ def create(
         if debug:
             logging.debug(f"Output directory: {destination_dir}")
 
-        process_template(
-            final_agent,
-            template_path,
-            project_name,
-            deployment_target=final_deployment,
-            include_data_ingestion=include_data_ingestion,
-            datastore=datastore,
-            output_dir=destination_dir,
-        )
+        try:
+            # Process template (handles both local and remote templates)
+            process_template(
+                final_agent,
+                template_path,
+                project_name,
+                deployment_target=final_deployment,
+                cicd_runner=final_cicd_runner,
+                include_data_ingestion=include_data_ingestion,
+                datastore=datastore,
+                session_type=final_session_type,
+                output_dir=destination_dir,
+                remote_template_path=template_source_path,
+                remote_config=config if template_source_path else None,
+                in_folder=in_folder,
+            )
 
-        # Replace region in all files if a different region was specified
-        if region != "us-central1":
-            replace_region_in_files(project_path, region, debug=debug)
+            # Replace region in all files if a different region was specified
+            if region != "us-central1":
+                replace_region_in_files(project_path, region, debug=debug)
+        finally:
+            # Clean up the temporary directory if one was created
+            if temp_dir_to_clean:
+                try:
+                    shutil.rmtree(temp_dir_to_clean)
+                    logging.debug(
+                        f"Successfully cleaned up temporary directory: {temp_dir_to_clean}"
+                    )
+                except OSError as e:
+                    logging.warning(
+                        f"Failed to clean up temporary directory {temp_dir_to_clean}: {e}"
+                    )
 
-        project_path = destination_dir / project_name
-        cd_path = project_path if output_dir else project_name
+        if not in_folder:
+            project_path = destination_dir / project_name
+            cd_path = project_path if output_dir else project_name
+        else:
+            project_path = destination_dir
+            cd_path = "."
 
         if include_data_ingestion:
             project_id = creds_info.get("project", "")
@@ -322,8 +673,13 @@ def create(
         )
         # Determine the correct path to display based on whether output_dir was specified
         console.print("\n🚀 To get started, run the following command:")
+
+        # Check if the agent has a 'dev' command in its settings
+        interactive_command = config.get("settings", {}).get(
+            "interactive_command", "playground"
+        )
         console.print(
-            f"   [bold bright_green]cd {cd_path} && make install && make playground[/]"
+            f"   [bold bright_green]cd {cd_path} && make install && make {interactive_command}[/]"
         )
     except Exception:
         if debug:
@@ -361,14 +717,128 @@ def display_agent_selection(deployment_target: str | None = None) -> str:
             f"{num}. [bold]{agent['name']}[/] - [dim]{agent['description']}[/]"
         )
 
+    # Add special option for adk-samples
+    adk_samples_option = len(agents) + 1
+    console.print(
+        f"{adk_samples_option}. [bold]Browse agents from [link=https://github.com/google/adk-samples]google/adk-samples[/link][/] - [dim]Discover additional samples[/]"
+    )
+
     choice = IntPrompt.ask(
         "\nEnter the number of your template choice", default=1, show_default=True
     )
 
-    if choice not in agents:
+    if choice == adk_samples_option:
+        return display_adk_samples_selection()
+    elif choice in agents:
+        return agents[choice]["name"]
+    else:
         raise ValueError(f"Invalid agent selection: {choice}")
 
-    return agents[choice]["name"]
+
+def display_adk_samples_selection() -> str:
+    """Display adk-samples agents and prompt for selection."""
+
+    from ..utils.remote_template import fetch_remote_template, parse_agent_spec
+
+    console.print("\n> Fetching agents from [bold blue]google/adk-samples[/]...")
+
+    try:
+        # Parse the adk-samples repository
+        spec = parse_agent_spec("https://github.com/google/adk-samples")
+        if not spec:
+            raise RuntimeError("Failed to parse adk-samples repository")
+
+        # Fetch the repository
+        repo_path, _ = fetch_remote_template(spec)
+
+        # Scan for agents in the repository
+        adk_agents = {}
+        agent_count = 1
+
+        # Search for pyproject.toml files to identify agents
+        for config_path in sorted(repo_path.glob("**/pyproject.toml")):
+            try:
+                with open(config_path, "rb") as f:
+                    pyproject_data = tomllib.load(f)
+
+                config = pyproject_data.get("tool", {}).get("agent-starter-pack", {})
+
+                # Skip pyproject.toml files that don't have agent-starter-pack config
+                if not config:
+                    continue
+
+                template_root = config_path.parent
+
+                # Use fallbacks to [project] section if needed
+                project_info = pyproject_data.get("project", {})
+                agent_name = (
+                    config.get("name") or project_info.get("name") or template_root.name
+                )
+                description = (
+                    config.get("description") or project_info.get("description") or ""
+                )
+
+                # Get the relative path from repo root
+                relative_path = template_root.relative_to(repo_path)
+
+                # For adk-samples, use just the agent name for the spec
+                # This handles cases like python/agents/gemini-fullstack -> gemini-fullstack
+                agent_spec_name = (
+                    relative_path.name
+                    if relative_path != relative_path.parent
+                    else str(relative_path)
+                )
+
+                adk_agents[agent_count] = {
+                    "name": agent_name,
+                    "description": description,
+                    "path": str(relative_path),
+                    "spec": f"adk@{agent_spec_name}",
+                }
+                agent_count += 1
+
+            except Exception as e:
+                logging.warning(
+                    f"Could not load agent from {config_path.parent.parent}: {e}"
+                )
+
+        if not adk_agents:
+            console.print("No agents found in adk-samples repository", style="yellow")
+            # Fall back to local agents
+            return display_agent_selection()
+
+        console.print("\n> Available agents from [bold blue]google/adk-samples[/]:")
+        for num, agent in adk_agents.items():
+            console.print(
+                f"{num}. [bold]{agent['name']}[/] - [dim]{agent['description']}[/]"
+            )
+
+        # Add option to go back to local agents
+        back_option = len(adk_agents) + 1
+        console.print(
+            f"{back_option}. [bold]← Back to built-in agents[/] - [dim]Return to local agent selection[/]"
+        )
+
+        choice = IntPrompt.ask(
+            "\nEnter the number of your choice", default=1, show_default=True
+        )
+
+        if choice == back_option:
+            return display_agent_selection()
+        elif choice in adk_agents:
+            # Return the adk@ spec for the selected agent
+            selected_agent = adk_agents[choice]
+            console.print(
+                f"\n> Selected: [bold]{selected_agent['name']}[/] from adk-samples"
+            )
+            return selected_agent["spec"]
+        else:
+            raise ValueError(f"Invalid agent selection: {choice}")
+
+    except Exception as e:
+        console.print(f"Error fetching adk-samples agents: {e}", style="bold red")
+        console.print("Falling back to built-in agents...", style="yellow")
+        return display_agent_selection()
 
 
 def set_gcp_project(project_id: str, set_quota_project: bool = True) -> None:
@@ -467,11 +937,19 @@ def _handle_credential_verification(creds_info: dict) -> dict:
     # Check if running in Cloud Shell
     if os.environ.get("CLOUD_SHELL") == "true":
         if creds_info["project"] == "":
-            console.print("> It looks like you are running in Cloud Shell.")
             console.print(
-                "> You need to set up a project ID to continue, but you haven't setup a project yet."
+                "> It looks like you are running in Cloud Shell.", style="bold blue"
             )
-            new_project = Prompt.ask("\n> Enter a project ID")
+            console.print(
+                "> You need to set up a project ID to continue, but you haven't setup a project yet.",
+                style="bold blue",
+            )
+            new_project = Prompt.ask("\n> Enter a project ID", default=None)
+            while not new_project:
+                console.print(
+                    "> Project ID cannot be empty. Please try again.", style="bold red"
+                )
+                new_project = Prompt.ask("\n> Enter a project ID", default=None)
             creds_info["project"] = new_project
             set_gcp_project(creds_info["project"], set_quota_project=False)
         return creds_info
